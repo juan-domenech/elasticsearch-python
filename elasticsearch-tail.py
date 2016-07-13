@@ -4,10 +4,12 @@ from elasticsearch import Elasticsearch
 
 # http://elasticsearch-py.readthedocs.io/en/master/
 
-es = Elasticsearch(['es:8080'])
+# es = Elasticsearch(['es:8080'])
+es = Elasticsearch(['es:80'])
 
-index = "logstash-2016.07.08"
-doc_type = "apache-access-az1"
+index = "logstash-2016.07.13"
+#doc_type = "apache-access-az1"
+doc_type = "apache"
 
 # http://elasticsearch-py.readthedocs.io/en/master/api.html#elasticsearch.Elasticsearch.search
 #res = es.search(size="20", index="logstash-2016.07.06", doc_type="apache-access-az2", fields="@timestamp,_id", body={"query": {"match": {"clientip": "66.249.64.165"}}})
@@ -16,14 +18,16 @@ def to_array(res):
     events = []
     for hit in res['hits']['hits']:
         # Event to array of tuples
-        events.append( (hit['fields']['@timestamp'][0] , hit['fields']['message'][0]) )
+        #events.append( (hit['fields']['@timestamp'][0], hit['fields']['host'][0], hit['fields']['level'][0], hit['fields']['logmessage'][0]  ) )
+        events.append((hit['fields']['@timestamp'][0], hit['fields']['host'][0], hit['fields']['message'][0]))
+
         #print hit['fields']['@timestamp'][0],hit['fields']['message'][0]
     return events
 
 
 def list_events(events):
     for event in events:
-        print event
+        print event[0],event[1], event[2]
 
 
 # def sort_event(events):
@@ -31,8 +35,23 @@ def list_events(events):
 
 
 def get_latest_event_timestamp(index):
-    res = es.search(size="1", index=index, doc_type=doc_type, fields="@timestamp,message", sort="@timestamp:desc", body={"query": {"match_all": {}}})
+    res = es.search(size="1", index=index, doc_type=doc_type, fields="@timestamp", sort="@timestamp:desc",
+                    body={
+                        "query":
+                            {"match_all": {}
+                             }
+                    }
+                    # body={
+                    #     "query": {
+                    #             "term": {
+                    #                 "path": "/var/log/"
+                    #             }
+                    #     }
+                    # }
+                    )
+    print res
     timestamp = res['hits']['hits'][0]['fields']['@timestamp'][0]
+    print timestamp
     timestamp_formated = datetime.datetime( int(timestamp[0:4]), int(timestamp[5:7]), int(timestamp[8:10]), int(timestamp[11:13]), int(timestamp[14:16]), int(timestamp[17:19]))
     return timestamp_formated
 
@@ -41,6 +60,7 @@ latest_event_timestamp = get_latest_event_timestamp(index)
 #get_latest_event_timestamp_formated = get_latest_event_timestamp[0:19]
 #get_latest_event_timestamp = datetime.datetime( int(get_latest_event_timestamp[0:4]), int(get_latest_event_timestamp[5:7]), int(get_latest_event_timestamp[8:10]), int(get_latest_event_timestamp[11:13]), int(get_latest_event_timestamp[14:16]), int(get_latest_event_timestamp[17:19])   )
 
+#print latest_event_timestamp
 previous_event_timestamp = latest_event_timestamp
 
 while True:
@@ -68,7 +88,28 @@ while True:
     to_date_time = latest_event_timestamp.strftime('%Y-%m-%dT%H:%M:%S')
 
     # https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl-range-query.html
-    res = es.search(size="1000", index=index, doc_type=doc_type, fields="@timestamp,message", body={"query": {"range": {"@timestamp": {"gte": from_date_time, "lte": to_date_time }}}})
+    res = es.search(size="1000", index=index, doc_type=doc_type, fields="@timestamp,message,path,host,level", sort="@timestamp:desc",
+                    body={
+                        "query":{
+                            "filtered":{
+                                    "filter":{
+                                        "and":[
+                                            {
+                                                "range":{
+                                                    "@timestamp":{"gte": from_date_time, "lte": to_date_time }
+                                                }
+
+                                            },
+                                            {
+                                                "term":{"type": "apache"}
+                                                }
+
+                                        ]
+                                    }
+                            }
+                        }
+                    }
+                    )
 
     events = to_array(res)
     # for event in events:
