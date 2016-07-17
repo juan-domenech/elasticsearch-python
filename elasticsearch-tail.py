@@ -7,6 +7,7 @@ from elasticsearch import Elasticsearch
 parser = ArgumentParser(description='Unix like tail command for Elastisearch')
 parser.add_argument('-e', '--endpoint', help='ES endpoint URL', default='es:80')
 parser.add_argument('-t', '--type', help='Doc_Type: apache, java, tomcat,... ', default='apache')
+parser.add_argument('-i', '--index', help='Index name. If none then logstash-%Y.%m.%d will be used.')
 #parser.add_argument('-n', '--host', help='Hostname ', default='s1')
 args = parser.parse_args()
 
@@ -16,6 +17,11 @@ endpoint = args.endpoint
 doc_type = args.type
 #
 # host = args.host
+if not args.index:
+    index = time2.strftime("logstash-%Y.%m.%d")
+else:
+    index = args.index
+
 
 # { "_id": {"timestamp":"sort(in milliseconds)", "host":"", "type":"", "message":"") }
 event_pool = {}
@@ -23,8 +29,6 @@ event_pool = {}
 # http://elasticsearch-py.readthedocs.io/en/master/
 # es = Elasticsearch(['es:8080'])
 es = Elasticsearch(endpoint)
-
-index = time2.strftime("logstash-%Y.%m.%d")
 
 # http://elasticsearch-py.readthedocs.io/en/master/api.html#elasticsearch.Elasticsearch.search
 
@@ -41,10 +45,11 @@ def to_array(res):
         #events.append( (hit['fields']['@timestamp'][0], hit['fields']['host'][0], hit['fields']['level'][0], hit['fields']['logmessage'][0]  ) )
         events.append((id, timestamp, host, doc_type, message))
 
+        #print events
         #print hit['fields']['@timestamp'][0],hit['fields']['message'][0]
 
-        # Every new event becomes a new key in the dictionary. Duplicated events (_id) cancel themselves.
-        # This allows us to retrive the same event multiple times
+        # Every new event becomes a new key in the dictionary. Duplicated events (_id) cancel themselves (Only one remains)
+        # In case an event is retrieved multiple times won't cause duplicates.
         event_pool[id] = { 'timestamp': timestamp, 'host': host,'type': doc_type, 'message': message }
 
     return events
@@ -54,7 +59,6 @@ def list_events(events):
     for event in events:
         # print event[0], event[1], event[2], event[3], event[4]
         print event[0], datetime.datetime.utcfromtimestamp( float(str( event[1] )[:-3]+'.'+str( event[1] )[-3:]) ).strftime('%Y-%m-%dT%H:%M:%S.%f'), event[2], event[3], event[4]
-
 
 
 def get_latest_event_timestamp(index):
@@ -72,10 +76,10 @@ def get_latest_event_timestamp(index):
                     #     }
                     # }
                     )
-    print "DEBUG:",res
+    print "DEBUG:get_latest_event_timestamp",res
     # timestamp = res['hits']['hits'][0]['fields']['@timestamp'][0]
     timestamp = res['hits']['hits'][0]['sort'][0]
-    print "DEBUG:",timestamp
+    print "DEBUG:get_latest_event_timestamp",timestamp
     # timestamp_formated = datetime.datetime( int(timestamp[0:4]), int(timestamp[5:7]), int(timestamp[8:10]), int(timestamp[11:13]), int(timestamp[14:16]), int(timestamp[17:19]))
     return timestamp
 
@@ -84,7 +88,6 @@ def print_event(event):
     event = event_pool[event]
     print "DEBUG:",event
     print datetime.datetime.utcfromtimestamp( float(str( event['timestamp'] )[:-3]+'.'+str( event['timestamp'] )[-3:]) ).strftime('%Y-%m-%dT%H:%M:%S.%f'), event['host'], event['type'], event['message']
-    return
 
 
 def purge_event_pool():
@@ -96,7 +99,7 @@ def purge_event_pool():
     #oldest = 9999999999999
     list = []
     for event in event_pool:
-        #print event_pool[event]['timestamp']
+        print event_pool[event]['timestamp']
         # if event_pool[event]['timestamp'] <= oldest:
         #     oldest = event_pool[event]['timestamp']
         list.append(event_pool[event]['timestamp'])
@@ -119,8 +122,9 @@ def purge_event_pool():
 latest_event_timestamp = get_latest_event_timestamp(index)
 # Substract on second from it
 # one_second_ago = latest_event_timestamp - datetime.timedelta(seconds = 1)
-one_second_ago = latest_event_timestamp - 1000
-# That is what we need to get the first batch of events
+# one_second_ago = latest_event_timestamp - 1000
+# Go 10 senconds to the past
+ten_seconds_ago = latest_event_timestamp - 10000
 
 #get_latest_event_timestamp_formated = get_latest_event_timestamp[0:19]
 #get_latest_event_timestamp = datetime.datetime( int(get_latest_event_timestamp[0:4]), int(get_latest_event_timestamp[5:7]), int(get_latest_event_timestamp[8:10]), int(get_latest_event_timestamp[11:13]), int(get_latest_event_timestamp[14:16]), int(get_latest_event_timestamp[17:19])   )
@@ -149,12 +153,14 @@ while True:
     # to_date_time = six_days_ago_plus_one_second_formated
 
 
-    # From timestamp in milliseconds to Elasticsearch format
+    # From timestamp in milliseconds to Elasticsearch format (seconds.milliseconds)
+    from_date_time = datetime.datetime.utcfromtimestamp( float(str( ten_seconds_ago )[:-3]+'.'+str( ten_seconds_ago )[-3:])  ).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3]
+    to_date_time = datetime.datetime.utcfromtimestamp( float(str( latest_event_timestamp )[:-3]+'.'+str( latest_event_timestamp )[-3:]) ).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3]
     # from_date_time = one_second_ago.strftime('%Y-%m-%dT%H:%M:%S')
     # to_date_time = latest_event_timestamp.strftime('%Y-%m-%dT%H:%M:%S')
-    from_date_time = datetime.datetime.utcfromtimestamp( float(str( one_second_ago )[:-3]+'.'+str( one_second_ago )[-3:])  ).strftime('%Y-%m-%dT%H:%M:%S.%f')
-    to_date_time = datetime.datetime.utcfromtimestamp( float(str( latest_event_timestamp )[:-3]+'.'+str( latest_event_timestamp )[-3:]) ).strftime('%Y-%m-%dT%H:%M:%S.%f')
 
+    print from_date_time
+    print to_date_time
     # https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl-range-query.html
     res = es.search(size="9999", index=index, doc_type=doc_type, fields="@timestamp,message,path,host,level", sort="@timestamp:asc",
                     body={
@@ -179,25 +185,30 @@ while True:
                     }
                     )
 
+    print res
     events = to_array(res)
     # for event in events:
     #     print event
 
-    list_events(events)
+    # list_events(events)
     #print len(events)
     #print event_pool
     #print len(event_pool)
 
-    #purge_event_pool()
+    purge_event_pool()
 
-    # Move the 'past' pointer the the 'present' (the value that the previous get_latest_event_timestamp gave us
-    one_second_ago = latest_event_timestamp
+    # Move the 'past' pointer one second ahead
+    ten_seconds_ago = ten_seconds_ago + 1000
+    # one_second_ago = latest_event_timestamp
 
     # Wait for ES to index a bit more of stuff
     time2.sleep(1)
 
-    # Move the present to the latest event found in ES
-    latest_event_timestamp = get_latest_event_timestamp(index)
+    # Move the 'present' to now (Epoch milliseconds)
+    latest_event_timestamp = datetime.datetime.utcnow().strftime('%s.%f')[:-3]
+    # latest_event_timestamp = get_latest_event_timestamp(index)
     # latest_event_timestamp = latest_event_timestamp - 1000
+
+    # To-Do: Check the last-event-pointer going ahead overtime beyond the 10s boundary and adjust size of buffer
 
     # And here we go again...
