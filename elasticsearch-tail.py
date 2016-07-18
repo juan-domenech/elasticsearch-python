@@ -4,8 +4,6 @@ import time as time2
 from argparse import ArgumentParser
 from elasticsearch import Elasticsearch
 
-DEBUG = 1
-
 # To-Do: Check the last-event-pointer going ahead overtime beyond the 10s boundary and adjust size of buffer
 
 # Arguments parsing
@@ -13,6 +11,7 @@ parser = ArgumentParser(description='Unix like tail command for Elastisearch')
 parser.add_argument('-e', '--endpoint', help='ES endpoint URL', default='es:80')
 parser.add_argument('-t', '--type', help='Doc_Type: apache, java, tomcat,... ', default='apache')
 parser.add_argument('-i', '--index', help='Index name. If none then logstash-%Y.%m.%d will be used.')
+parser.add_argument('-d', '--debug', help='Debug')
 #parser.add_argument('-n', '--host', help='Hostname ', default='s1')
 args = parser.parse_args()
 
@@ -26,13 +25,17 @@ if not args.index:
     index = time2.strftime("logstash-%Y.%m.%d")
 else:
     index = args.index
+# debug = None or debug != None
+if args.debug:
+    DEBUG = args.debug
+else:
+    DEBUG = None
 
 
 # { "_id": {"timestamp":"sort(in milliseconds)", "host":"", "type":"", "message":"") }
 event_pool = {}
 
 # http://elasticsearch-py.readthedocs.io/en/master/
-# es = Elasticsearch(['es:8080'])
 es = Elasticsearch(endpoint)
 
 # http://elasticsearch-py.readthedocs.io/en/master/api.html#elasticsearch.Elasticsearch.search
@@ -131,22 +134,7 @@ def to_object(res):
 #        print event[0], datetime.datetime.utcfromtimestamp( float(str( event[1] )[:-3]+'.'+str( event[1] )[-3:]) ).strftime('%Y-%m-%dT%H:%M:%S.%f'), event[2], event[3], event[4]
 
 
-
 def purge_event_pool(event_pool):
-    # ten_seconds_ago = datetime.datetime.utcnow() - datetime.timedelta(seconds = 10)
-    # desired_time = ten_seconds_ago.strftime('%Y-%m-%dT%H:%M:%S')
-    # print 'desired_time ',desired_time
-    # # Get the oldest event timestamp
-    # #oldest = 9999999999999
-    # list = []
-    # new_event_pool = {}
-    # for event in event_pool:
-    #     #print event_pool[event]['timestamp']
-    #     # if event_pool[event]['timestamp'] <= oldest:
-    #     #     oldest = event_pool[event]['timestamp']
-    #     list.append(event_pool[event]['timestamp'])
-    # oldest = sorted(list)[0]
-
     debug("into purge len_pool "+str(len(event_pool)))
     oldest = get_oldest_in_the_pool()
 
@@ -159,11 +147,8 @@ def purge_event_pool(event_pool):
         if str(event_pool[event]['timestamp'])[:-3] == oldest_seconds_string:
             # Print and...
             print_event(event)
+            # delete.
             event_pool.pop(event)
-        # else:
-            # # Only copy what has not been printed out to have it ready for the next round
-            # # debug(event_pool[event])
-            # new_event_pool[event] = event_pool[event]
 
     debug("out of purge len_pool "+str(len(event_pool)))
     return
@@ -266,8 +251,8 @@ while True:
 
     if len(res['hits']['hits']) == 0:
         debug("Empty response!")
-    else:
 
+    else:
         # Add all the events in the response into the event_pool
         to_object(res)
 
