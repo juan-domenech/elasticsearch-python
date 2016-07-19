@@ -31,6 +31,7 @@ if args.debug:
 else:
     DEBUG = None
 
+interval = 1000
 
 # { "_id": {"timestamp":"sort(in milliseconds)", "host":"", "type":"", "message":"") }
 event_pool = {}
@@ -138,17 +139,25 @@ def purge_event_pool(event_pool):
     debug("into purge len_pool "+str(len(event_pool)))
     oldest = get_oldest_in_the_pool()
 
-    # Print the events that are in the same second as the oldest event timestamp
-    oldest_seconds_string = str(oldest)[:-3]
+    # # Print the events that are in the same second as the oldest event timestamp
+    # oldest_seconds_string = str(oldest)[:-3]
+    # oldest_milliseconds_string = str(oldest)
+
     # debug("oldest_seconds "+oldest_seconds+datetime.datetime.utcfromtimestamp(float(oldest_seconds)).strftime('%Y-%m-%dT%H:%M:%S'))
-    debug("oldest_seconds "+oldest_seconds_string+" "+from_epoch_seconds_to_string(int(oldest_seconds_string)))
-    # size = len(event_pool)
+    # debug("oldest_seconds "+oldest_seconds_string+" "+from_epoch_seconds_to_string(int(oldest_seconds_string)))
+    # debug("oldest_seconds "+oldest_milliseconds_string+" "+from_epoch_seconds_to_string(int(oldest_milliseconds_string)))
+    debug("oldest "+str(oldest)+" "+from_epoch_milliseconds_to_string(oldest))
+
     for event in event_pool.copy():
-        if str(event_pool[event]['timestamp'])[:-3] == oldest_seconds_string:
+        # if str(event_pool[event]['timestamp'])[:-3] == oldest_seconds_string:
+        event_timestamp = int(event_pool[event]['timestamp'])
+        if event_timestamp >= oldest and event_timestamp < oldest + interval:
             # Print and...
             print_event(event)
             # delete.
             event_pool.pop(event)
+        else:
+            debug("ignored event_timestamp "+str(from_epoch_milliseconds_to_string(event_timestamp)))
 
     debug("out of purge len_pool "+str(len(event_pool)))
     return
@@ -161,7 +170,7 @@ def get_oldest_in_the_pool(): # timestamp
         # if event_pool[event]['timestamp'] <= oldest:
         #     oldest = event_pool[event]['timestamp']
         list.append(event_pool[event]['timestamp'])
-    oldest = sorted(list)[0]
+    oldest = int(sorted(list)[0])
     # debug("final oldest "+str(oldest)+(datetime.datetime.utcfromtimestamp(float(oldest)/1000).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3]))
     debug("final oldest "+str(oldest)+" "+from_epoch_milliseconds_to_string(int(oldest)))
     return oldest
@@ -273,9 +282,9 @@ while True:
     # latest_event_timestamp = datetime.datetime.utcnow().strftime('%s%f')[:-3]
 
     # Move the 'past' pointer one second ahead
-    ten_seconds_ago = ten_seconds_ago + 1000
+    ten_seconds_ago = ten_seconds_ago + interval
 
     # Wait for ES to index a bit more of stuff
-    time2.sleep(1)
+    time2.sleep(interval/1000)
 
     # And here we go again...
