@@ -4,6 +4,7 @@ import time as time2
 from argparse import ArgumentParser
 from elasticsearch import Elasticsearch
 from multiprocessing import Process, Lock, current_process
+from random import randint
 
 # To-Do:
 # Check the last-event-pointer going ahead overtime beyond the 10s boundary and adjust size of buffer
@@ -35,7 +36,12 @@ if args.debug:
     DEBUG = args.debug
 else:
     DEBUG = None
-
+# Dummy Load
+if args.endpoint == 'dummy' or args.endpoint == 'DUMMY':
+    DUMMY = True
+    print "Activating Dummy Load"
+else:
+    DUMMY = False
 
 
 def debug(message):
@@ -294,7 +300,9 @@ def search_events_dummy_load(from_date_time):
     took = 100
     time_out = False
 
-    total = 100
+    # total = 100
+    total = randint(0,100)
+    debug('search_events_dummy_load: total: '+str(total))
 
     timestamp = from_date_time_milliseconds
     # fields = {'path': [path], 'host': [host], 'message': [message], '@timestamp': [from_epoch_milliseconds_to_string(timestamp)] }
@@ -308,7 +316,7 @@ def search_events_dummy_load(from_date_time):
         hit = { 'sort': [timestamp], '_type': doc_type, '_index': index, '_score': score, 'fields': fields, '_id': doc_id }
         hits.append(hit)
 
-        timestamp += 100
+        timestamp += total
 
     hits = {'hits':hits}
     hits['total'] = total
@@ -319,7 +327,7 @@ def search_events_dummy_load(from_date_time):
     res['took'] = took
     res['time_out'] = time_out
 
-    time2.sleep(total/100)
+    # time2.sleep(2)
 
     return res
 
@@ -336,8 +344,6 @@ def get_latest_event_timestamp_dummy_load(index):
 
 
 debug("main: now "+from_epoch_milliseconds_to_string(datetime.datetime.utcnow().strftime('%s%f')[:-3]))
-
-DUMMY = True
 
 interval = 500
 
