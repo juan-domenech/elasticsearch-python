@@ -11,6 +11,7 @@ from random import randint
 # Eliminate the need of a sorted result from ES when searching
 # Secondary sort of results by additional keys for events on the same timestamp
 # Try/detect missing index and go to the past searching for the latest one
+# Keep time-in-the-past frozen when there are no new results are recover once they are to avoid gaps
 
 # Arguments parsing
 parser = ArgumentParser(description='Unix like tail command for Elastisearch')
@@ -18,7 +19,7 @@ parser.add_argument('-e', '--endpoint', help='ES endpoint URL', default='es:80')
 parser.add_argument('-t', '--type', help='Doc_Type: apache, java, tomcat,... ', default='apache')
 parser.add_argument('-i', '--index', help='Index name. If none then logstash-%Y.%m.%d will be used.')
 parser.add_argument('-d', '--debug', help='Debug', action="store_true")
-#parser.add_argument('-n', '--host', help='Hostname ', default='s1')
+# parser.add_argument('-n', '--host', help='Hostname ', default='s1')
 args = parser.parse_args()
 
 # Elasticsearch endpoint hostname:port
@@ -28,7 +29,6 @@ doc_type = args.type
 #
 # host = args.host
 if not args.index:
-    # index = time2.strftime("logstash-%Y.%m.%d")
     index = datetime.datetime.utcnow().strftime("logstash-%Y.%m.%d")
 else:
     index = args.index
@@ -84,16 +84,9 @@ def get_latest_event_timestamp(index):
                             {"match_all": {}
                              }
                     }
-                    # body={
-                    #     "query": {
-                    #             "term": {
-                    #                 "path": "/var/log/"
-                    #             }
-                    #     }
-                    # }
                     )
+
     debug("get_latest_event_timestamp "+str(res))
-    # timestamp = res['hits']['hits'][0]['fields']['@timestamp'][0]
 
     # Check empty response
     if len(res['hits']['hits']) != 0:
@@ -156,7 +149,7 @@ def purge_event_pool(event_pool):
     # oldest = get_oldest_in_the_pool()
     debug("purge_event_pool: ten_seconds_ago "+from_epoch_milliseconds_to_string(ten_seconds_ago))
 
-    oldest_in_the_pool = get_oldest_in_the_pool()
+    # oldest_in_the_pool = get_oldest_in_the_pool()
 
     to_print = []
     for event in event_pool.copy():
@@ -165,7 +158,7 @@ def purge_event_pool(event_pool):
         # if event_timestamp >= current time pointer and < (current time pointer + the gap covered by interval):
         # if event_timestamp >= ten_seconds_ago and (event_timestamp < ten_seconds_ago + interval):
         # if event_timestamp <= oldest_in_the_pool + interval:
-        if event_timestamp >= ten_seconds_ago - interval and event_timestamp < ten_seconds_ago:
+        if (event_timestamp >= ten_seconds_ago - interval) and event_timestamp < ten_seconds_ago:
             # Print and...
             to_print.append(event_pool[event])
             # delete...
@@ -255,29 +248,20 @@ def what_to_do_while_we_wait():
     print_pool = []
 
 
-def es_search(from_date_time):
-    # l.acquire()
-    # if current_process().name == 'Process-1':
-    # print "I'am", current_process().name
-    res = search_events(from_date_time)
-
-    debug("from_date_time "+from_date_time)
-    debug("hits: "+str(len(res['hits']['hits'])))
-
-    if len(res['hits']['hits']) == 0:
-        debug("Empty response!")
-    else:
-        # Add all the events in the response into the event_pool
-        to_object(res)
-
-        # # Print and purge oldest events in the pool
-        # purge_event_pool(event_pool)
-    #
-    #     # l.release()
-    # else:
-    #     print "I'am",current_process().name
-    #     print "Process-1 already running!"
-
+# def es_search(from_date_time):
+#     # l.acquire()
+#     # if current_process().name == 'Process-1':
+#     # print "I'am", current_process().name
+#     res = search_events(from_date_time)
+#
+#     debug("from_date_time "+from_date_time)
+#     debug("hits: "+str(len(res['hits']['hits'])))
+#
+#     if len(res['hits']['hits']) == 0:
+#         debug("Empty response!")
+#     else:
+#         # Add all the events in the response into the event_pool
+#         to_object(res)
 
 
 def search_events_dummy_load(from_date_time):
@@ -341,7 +325,7 @@ def search_events_dummy_load(from_date_time):
     res['_shards'] = shards
     res['took'] = took
     res['time_out'] = time_out
-
+    # Let's simulate that ES takes some time to fulfill the request
     time2.sleep(2)
 
     return res
@@ -367,10 +351,9 @@ class Threading (threading.Thread):
         self.name = name
         self.from_date_time = from_date_time
     def run(self):
-        print "Starting " + self.name
-        # print_time(self.name, 1, 5)
+        debug("Starting " + self.name)
         thread_execution(self.from_date_time)
-        print "Exiting " + self.name
+        debug("Exiting " + self.name)
         del self
 
 
@@ -439,12 +422,12 @@ while True:
     # # Add all the events in the response into the event_pool
     # to_object(res)
 
-    if thread.isAlive() == False:
+    if not thread.isAlive():
         thread = Threading(1,"Thread-1", from_date_time)
         thread.start()
 
     # Move the 'past' pointer one 'interval' ahead
-    ten_seconds_ago = ten_seconds_ago + interval
+    ten_seconds_ago += interval
 
     # Print and purge oldest events in the pool
     purge_event_pool(event_pool)
