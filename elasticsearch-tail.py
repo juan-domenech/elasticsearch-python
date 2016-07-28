@@ -2,24 +2,39 @@ import datetime
 import sys
 import time as time2
 from argparse import ArgumentParser
-from elasticsearch import Elasticsearch
 import threading
 from random import randint
+import platform
+
+try:
+    from elasticsearch import Elasticsearch
+except:
+    print "ERROR: elasticsearch module not installed. Run 'sudo pip install elasticsearch'."
 
 # To-Do:
+# ! Include 'host' (and later others like 'level') as a searchable field on the main ES query
+# ! Use the additional term (host, level, etc.) in get_latest_event
 # Check the last-event-pointer going ahead overtime beyond the 10s boundary and adjust size of buffer
-# Eliminate the need of a sorted result from ES when searching
 # Secondary sort of results by additional keys for events on the same timestamp
-# Try/detect missing index and go to the past searching for the latest one
+# Try/detect missing todays logstash index and go to the past searching for the latest one available
 # Keep time-in-the-past frozen when there are no new results are recover once they are to avoid gaps
+# Detect and break gracefully with Ctrl-C
+# Detect ES timeouts (in searching and in get_last_event)
+
+# In case of error:
+# "elasticsearch.exceptions.ConnectionError: ConnectionError(('Connection failed.', CannotSendRequest())) caused by: ConnectionError(('Connection failed.', CannotSendRequest()))"
+# Update pip install --upgrade urllib3
+# or
+# Use a non HTTPS URL
 
 # Arguments parsing
 parser = ArgumentParser(description='Unix like tail command for Elastisearch')
 parser.add_argument('-e', '--endpoint', help='ES endpoint URL', default='es:80')
 parser.add_argument('-t', '--type', help='Doc_Type: apache, java, tomcat,... ', default='apache')
 parser.add_argument('-i', '--index', help='Index name. If none then logstash-%Y.%m.%d will be used.')
+parser.add_argument('-s', '--showheaders', help='Show @timestamp, hostname and type fields in the output.', action="store_true")
+parser.add_argument('-c', '--host', help='Hostname to search (optional)')
 parser.add_argument('-d', '--debug', help='Debug', action="store_true")
-# parser.add_argument('-n', '--host', help='Hostname ', default='s1')
 args = parser.parse_args()
 
 # Elasticsearch endpoint hostname:port
@@ -43,6 +58,23 @@ if args.endpoint == 'dummy' or args.endpoint == 'DUMMY':
     print "Activating Dummy Load"
 else:
     DUMMY = False
+# Hostname to search (Optional)
+if args.host:
+    host_to_search = args.host
+# Show headers. Show @timestamp, hostname and type columns from the output.
+if args.showheaders:
+    show_headers = True
+else:
+    show_headers = False
+
+# Workaround to make it work in AWS AMI Linux
+# Python in AWS fails to locate the CA to validate the ES endpoint SSL and we need to specify it :(
+# https://access.redhat.com/articles/2039753
+if platform.platform()[0:5] == 'Linux':
+    ca_certs = '/etc/pki/tls/certs/ca-bundle.crt'
+else:
+    # On the other side, in OSX works like a charm.
+    ca_certs = None
 
 
 def debug(message):
@@ -116,17 +148,29 @@ def get_latest_event_timestamp_dummy_load(index):
 def to_object(res):
     debug("to_object: in: len(event_pool) "+str(len(event_pool)))
     debug("to_object: hits: "+str(len(res['hits']['hits'])))
-    for hit in res['hits']['hits']:
-        id = str(hit['_id'])
-        timestamp = str(hit['sort'][0])
-        # host = str(hit['fields']['host'][0])
-        frontal = str(hit['fields']['frontal'][0])
-        message = str(hit['fields']['message'][0])
 
-        # Every new event becomes a new key in the dictionary. Duplicated events (_id) cancel themselves (Only a copy remains)
-        # In case an event is retrieved multiple times it won't cause duplicates.
-        # event_pool[id] = { 'timestamp': timestamp, 'host': host,'type': doc_type, 'message': message }
-        event_pool[id] = { 'timestamp': timestamp, 'frontal': frontal,'type': doc_type, 'message': message }
+    for hit in res['hits']['hits']:
+
+        # I've failed constructing the proper ES query to search by host.
+        # Ugly workaround. Shame on me :(
+        host = str(hit['fields']['host'][0])
+        if host_to_search in host:
+            id = str(hit['_id'])
+            timestamp = str(hit['sort'][0])
+            # host = str(hit['fields']['host'][0])
+            # frontal = str(hit['fields']['frontal'][0])
+            # message = hit['fields']['message'][0]
+            # message = message.decode("unicode")
+            try:
+                message = str(hit['fields']['message'][0])
+            except:
+                print "ERROR: *** ASCII out of range" + message + " ***"
+
+            # Every new event becomes a new key in the dictionary. Duplicated events (_id) cancel themselves (Only a copy remains)
+            # In case an event is retrieved multiple times it won't cause duplicates.
+            event_pool[id] = { 'timestamp': timestamp, 'host': host,'type': doc_type, 'message': message }
+            # event_pool[id] = { 'timestamp': timestamp, 'frontal': frontal,'type': doc_type, 'message': message }
+
     debug("to_object: out: len(event_pool) "+str(len(event_pool)))
     return
 
@@ -171,15 +215,38 @@ def purge_event_pool(event_pool):
     def getKey(item):
         return item['timestamp']
 
-    # Print
+    # Print (add to print_pool) and let wait() function to print it out later
     for event in sorted(to_print,key=getKey):
         # print_event_by_event(event)
+        if show_headers:
+            print_pool.append(str(from_epoch_milliseconds_to_string(event['timestamp']) + " " + event['host'] + " " + event['type'] + " " + event['message']) + '\n')
+        else:
+            print_pool.append(str(event['message']) + '\n')
         # print_pool.append(str(from_epoch_milliseconds_to_string(event['timestamp']) + " " + event['host'] + " " + event['type'] + " " +event['message'])[0:width] + '\n')
-        print_pool.append(str(from_epoch_milliseconds_to_string(event['timestamp']) + " " + event['frontal'] + " " + event['type'] + " " +event['message'])[0:width] + '\n')
+        # print_pool.append(str(from_epoch_milliseconds_to_string(event['timestamp']) + " " + event['frontal'] + " " + event['type'] + " " +event['message'])[0:width] + '\n')
 
     debug("purge_event_pool: out: "+str(len(event_pool)))
     debug("purge_event_pool: len(print_pool) "+str(len(print_pool)))
     return
+
+
+def query_test(from_date_time):
+    res = es.search(size="3", index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
+                    sort="@timestamp:asc",
+                    body={
+                          "query": {
+                            "filtered": {
+                              "query": { "match": {"host":"s1-ejm-b-euw.ej.mttnow.com"} },
+                              "filter": {
+                                "range": {
+                                  "@timestamp": {"gte": from_date_time}
+                                }
+                              }
+                            }
+                          }
+                        }
+                    )
+    return res
 
 
 def search_events(from_date_time):
@@ -188,32 +255,56 @@ def search_events(from_date_time):
         debug("search_events: from_date_time: "+from_date_time)
     # https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl-range-query.html
     # http://elasticsearch-py.readthedocs.io/en/master/api.html#elasticsearch.Elasticsearch.search
-    res = es.search(size="10000", index=index, doc_type=doc_type, fields="@timestamp,message,path,frontal", sort="@timestamp:asc",
+    if host_to_search != "":
+        debug("query: host: "+host_to_search)
+        res = es.search(size="10000", index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
+                    sort="@timestamp:asc",
                     body={
-                        "query":{
-                            "filtered":{
-                                    "filter":{
-                                        "and":[
-                                            {
-                                                # "range":{
-                                                #     "@timestamp":{"gte": from_date_time, "lte": to_date_time }
-                                                # }
-
-                                                "range": {
-                                                    "@timestamp": {"gte": from_date_time}
-                                                }
-                                            },
-                                            {
-                                                "term":{"_type": doc_type}
-                                                # "term": {"_source": {"host": "s1" } }
-                                                }
-
-                                        ]
+                        "query": {
+                            "filtered": {
+                                # "query": {"match": {"host": host}},
+                                # "query": {"wildcard": {"host": "s*"}},
+                                "query": {"match": {"host": host_to_search}},
+                                "filter": {
+                                    "range": {
+                                        "@timestamp": {"gte": from_date_time}
                                     }
+                                }
                             }
                         }
                     }
                     )
+
+    else:
+        res = es.search(size="10000", index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
+                    sort="@timestamp:asc",
+                    body={
+                        "query": {
+                            "filtered": {
+                                "filter": {
+                                    "and": [
+                                        {
+                                            # "range":{
+                                            #     "@timestamp":{"gte": from_date_time, "lte": to_date_time }
+                                            # }
+
+                                            "range": {
+                                                "@timestamp": {"gte": from_date_time}
+                                            }
+                                        },
+                                        {
+                                            # "term":{"_type": doc_type}
+                                            # "term": {"fields": {"host": "s1" } }
+                                            # "term": { "host": "s1" }
+                                        }
+
+                                    ]
+                                }
+                            }
+                        }
+                    }
+                    )
+
     if DEBUG:
         debug("ES search execution time: "+str( int(datetime.datetime.utcnow().strftime('%s%f')[:-3]) - current_time)+"ms" )
     return res
@@ -238,6 +329,8 @@ def wait(milliseconds):
     while final_time > current_time:
         current_time = int(datetime.datetime.utcnow().strftime('%s%f')[:-3])
         what_to_do_while_we_wait()
+        # Sleep just a bit to avoid hammering the CPU
+        time2.sleep(.01)
 
 
 def what_to_do_while_we_wait():
@@ -367,13 +460,15 @@ event_pool = {}
 
 print_pool = []
 
-width = 160
+width = 200
+
+# host_to_search = ""
 
 to_the_past = 10000 # milliseconds
 
 # http://elasticsearch-py.readthedocs.io/en/master/
 if not DUMMY:
-    es = Elasticsearch(endpoint)
+    es = Elasticsearch([endpoint],verify_certs=True, ca_certs=ca_certs)
 
 # Get the latest event timestamp from the Index
 if DUMMY:
