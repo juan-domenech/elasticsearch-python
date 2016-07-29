@@ -32,6 +32,7 @@ parser = ArgumentParser(description='Unix like tail command for Elastisearch')
 parser.add_argument('-e', '--endpoint', help='ES endpoint URL', default='es:80')
 parser.add_argument('-t', '--type', help='Doc_Type: apache, java, tomcat,... ', default='apache')
 parser.add_argument('-i', '--index', help='Index name. If none then logstash-%Y.%m.%d will be used.')
+parser.add_argument('-f', '--nonstop', help='Non stop. Continous tailing', action="store_true")
 parser.add_argument('-s', '--showheaders', help='Show @timestamp, hostname and type fields in the output.', action="store_true")
 parser.add_argument('-c', '--host', help='Hostname to search (optional)')
 parser.add_argument('-d', '--debug', help='Debug', action="store_true")
@@ -68,6 +69,11 @@ if args.showheaders:
     show_headers = True
 else:
     show_headers = False
+# Non Stop
+if args.nonstop:
+    non_stop = True
+else:
+    non_stop = False
 
 # Workaround to make it work in AWS AMI Linux
 # Python in AWS fails to locate the CA to validate the ES endpoint SSL and we need to specify it :(
@@ -113,47 +119,101 @@ def get_latest_event_timestamp(index):
     if DEBUG:
         current_time = int(datetime.datetime.utcnow().strftime('%s%f')[:-3])
     if host_to_search:
-        res = es.search(size="1", index=index, doc_type=doc_type, fields="@timestamp", sort="@timestamp:desc",
+        res = es.search(size=1, index=index, doc_type=doc_type, fields="@timestamp", sort="@timestamp:desc",
                         body={
                             "query":
                                 {"match_phrase": {"host": host_to_search}}
                         }
                         )
-    #
-    # body = {
-    #     "query": {
-    #         "filtered": {
-    #             "query": {"match_phrase": {"host": host_to_search}},
-    #             "filter": {
-    #                 "range": {
-    #                     "@timestamp": {"gte": from_date_time}
-    #                 }
-    #             }
-    #         }
-    #     }
-    # }
-
     else:
-        res = es.search(size="1", index=index, doc_type=doc_type, fields="@timestamp", sort="@timestamp:desc",
+        res = es.search(size=1, index=index, doc_type=doc_type, fields="@timestamp", sort="@timestamp:desc",
                         body={
                             "query":
-                                {"match_all": {} }
+                                {"match_all": {}}
                         }
                         )
 
     debug("get_latest_event_timestamp "+str(res))
 
-    # Check empty response
+    # At least one event should return, otherwise we have an issue.
+    # On To-Do: to go a logstash index back trying to find the last event (it might be midnight...)
     if len(res['hits']['hits']) != 0:
         timestamp = res['hits']['hits'][0]['sort'][0]
         # Discard milliseconds and round down to seconds
         timestamp = (timestamp/1000)*1000
         debug("get_latest_event_timestamp "+str(timestamp)+" "+from_epoch_milliseconds_to_string(timestamp))
         if DEBUG:
-            debug("ES lastest_event execution time: " + str(int(datetime.datetime.utcnow().strftime('%s%f')[:-3]) - current_time) + "ms")
+            debug("ES get_lastest_event execution time: " + str(int(datetime.datetime.utcnow().strftime('%s%f')[:-3]) - current_time) + "ms")
         return timestamp
     else:
         print "ERROR: get_latest_event_timestamp: No results"
+        exit(1)
+
+
+def get_latest_events(index): # And print them
+
+    global event_pool
+    global print_pool
+    to_print = []
+
+    if DEBUG:
+        current_time = int(datetime.datetime.utcnow().strftime('%s%f')[:-3])
+    if host_to_search:
+        res = es.search(size=docs, index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
+                        sort="@timestamp:desc",
+                        body={
+                            "query":
+                                {"match_phrase": {"host": host_to_search}}
+                        }
+                        )
+    else:
+        res = es.search(size=docs, index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
+                        sort="@timestamp:desc",
+                        body={
+                            "query":
+                                {"match_all": {}}
+                        }
+                        )
+
+    debug("get_latest_events" + str(res))
+
+    # At least one event should return, otherwise we have an issue.
+    # On To-Do: to go a logstash index back trying to find the last event (it might be midnight...)
+    if len(res['hits']['hits']) != 0:
+        timestamp = res['hits']['hits'][0]['sort'][0]
+
+        to_object(res)
+
+        #### Function needed here (and for purge() too)
+
+        for event in event_pool:
+            to_print.append(event_pool[event])
+
+        # Sort by timestamp
+        def getKey(item):
+            return item['timestamp']
+
+        for event in sorted(to_print, key=getKey):
+            if show_headers:
+                print_pool.append(
+                    from_epoch_milliseconds_to_string(event['timestamp']) + " " + event['host'] + " " + event[
+                        'type'] + " " + event['message'] + '\n')
+            else:
+                print_pool.append(event['message'] + '\n')
+
+        what_to_do_while_we_wait()
+        print_pool = []
+        event_pool = {}
+
+        ####
+
+        debug("get_latest_event_timestamp " + str(timestamp) + " " + from_epoch_milliseconds_to_string(timestamp))
+        if DEBUG:
+            debug("ES get_lastest_events execution time: " + str(
+                int(datetime.datetime.utcnow().strftime('%s%f')[:-3]) - current_time) + "ms")
+        return timestamp
+    else:
+        print "ERROR: get_latest_events: No results"
         exit(1)
 
 
@@ -173,53 +233,51 @@ def to_object(res):
     debug("to_object: hits: "+str(len(res['hits']['hits'])))
 
     for hit in res['hits']['hits']:
-
-        # I've failed constructing the proper ES query to search by host.
-        # Ugly workaround. Shame on me :(
         host = str(hit['fields']['host'][0])
-        ### Bad
-        if host_to_search in host:
-            id = str(hit['_id'])
-            timestamp = str(hit['sort'][0])
-            # host = str(hit['fields']['host'][0])
-            # frontal = str(hit['fields']['frontal'][0])
-            # message = hit['fields']['message'][0]
-            # message = message.decode("unicode")
-            try:
-                # message = str(hit['fields']['message'][0])
-                message = hit['fields']['message'][0]
-            except:
-                print "ERROR: *** ASCII out of range" + message + " ***"
-                exit(1)
+        id = str(hit['_id'])
+        timestamp = str(hit['sort'][0])
+        # host = str(hit['fields']['host'][0])
+        # frontal = str(hit['fields']['frontal'][0])
+        # message = hit['fields']['message'][0]
+        # message = message.decode("unicode")
+        try:
+            # message = str(hit['fields']['message'][0])
+            message = hit['fields']['message'][0]
+        except:
+            print "ERROR: *** ASCII out of range" + message + " ***"
+            exit(1)
 
-            # Every new event becomes a new key in the dictionary. Duplicated events (_id) cancel themselves (Only a copy remains)
-            # In case an event is retrieved multiple times it won't cause duplicates.
-            event_pool[id] = { 'timestamp': timestamp, 'host': host,'type': doc_type, 'message': message }
-            # event_pool[id] = { 'timestamp': timestamp, 'frontal': frontal,'type': doc_type, 'message': message }
+        # Every new event becomes a new key in the dictionary. Duplicated events (_id) cancel themselves (Only a copy remains)
+        # In case an event is retrieved multiple times it won't cause duplicates.
+        event_pool[id] = { 'timestamp': timestamp, 'host': host,'type': doc_type, 'message': message }
+        # event_pool[id] = { 'timestamp': timestamp, 'frontal': frontal,'type': doc_type, 'message': message }
 
     debug("to_object: out: len(event_pool) "+str(len(event_pool)))
     return
 
 
-def get_oldest_in_the_pool(): # timestamp
-    if len(event_pool) != 0:
-        list = []
-        for event in event_pool:
-            #print event_pool[event]['timestamp']
-            # if event_pool[event]['timestamp'] <= oldest:
-            #     oldest = event_pool[event]['timestamp']
-            list.append(event_pool[event]['timestamp'])
-        oldest = int(sorted(list)[0])
-        debug("get_oldest_in_the_pool: "+str(oldest)+" "+from_epoch_milliseconds_to_string(int(oldest)))
-        return oldest
+# def get_oldest_in_the_pool(): # timestamp
+#     if len(event_pool) != 0:
+#         list = []
+#         for event in event_pool:
+#             #print event_pool[event]['timestamp']
+#             # if event_pool[event]['timestamp'] <= oldest:
+#             #     oldest = event_pool[event]['timestamp']
+#             list.append(event_pool[event]['timestamp'])
+#         oldest = int(sorted(list)[0])
+#         debug("get_oldest_in_the_pool: "+str(oldest)+" "+from_epoch_milliseconds_to_string(int(oldest)))
+#         return oldest
+
+
+# # Sort by timestamp
+# def getKey(item):
+#     return item['timestamp']
 
 
 def purge_event_pool(event_pool):
     debug("purge_event_pool: in: "+str(len(event_pool)))
     # oldest = get_oldest_in_the_pool()
     debug("purge_event_pool: ten_seconds_ago "+from_epoch_milliseconds_to_string(ten_seconds_ago))
-
-    # oldest_in_the_pool = get_oldest_in_the_pool()
 
     to_print = []
     for event in event_pool.copy():
@@ -517,13 +575,20 @@ event_pool = {}
 
 print_pool = []
 
-# host_to_search = ""
+docs = 10
 
 to_the_past = 10000 # milliseconds
 
 # http://elasticsearch-py.readthedocs.io/en/master/
 if not DUMMY:
     es = Elasticsearch([endpoint],verify_certs=True, ca_certs=ca_certs)
+
+
+# When under -f just get the latest and exit
+if non_stop == False:
+    get_latest_events(index)
+    exit(0)
+
 
 # Get the latest event timestamp from the Index
 if DUMMY:
@@ -533,7 +598,6 @@ else:
 
 # Go 10 seconds to the past. There is where we place "in the past" pointer to give time to ES to consolidate its index.
 ten_seconds_ago = latest_event_timestamp - to_the_past
-
 
 ###
 # Initial load
