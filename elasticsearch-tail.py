@@ -61,6 +61,8 @@ else:
 # Hostname to search (Optional)
 if args.host:
     host_to_search = args.host
+else:
+    host_to_search = ''
 # Show headers. Show @timestamp, hostname and type columns from the output.
 if args.showheaders:
     show_headers = True
@@ -110,13 +112,34 @@ def from_string_to_epoch_milliseconds(string):
 def get_latest_event_timestamp(index):
     if DEBUG:
         current_time = int(datetime.datetime.utcnow().strftime('%s%f')[:-3])
-    res = es.search(size="1", index=index, doc_type=doc_type, fields="@timestamp", sort="@timestamp:desc",
-                    body={
-                        "query":
-                            {"match_all": {}
-                             }
-                    }
-                    )
+    if host_to_search:
+        res = es.search(size="1", index=index, doc_type=doc_type, fields="@timestamp", sort="@timestamp:desc",
+                        body={
+                            "query":
+                                {"match_phrase": {"host": host_to_search}}
+                        }
+                        )
+    #
+    # body = {
+    #     "query": {
+    #         "filtered": {
+    #             "query": {"match_phrase": {"host": host_to_search}},
+    #             "filter": {
+    #                 "range": {
+    #                     "@timestamp": {"gte": from_date_time}
+    #                 }
+    #             }
+    #         }
+    #     }
+    # }
+
+    else:
+        res = es.search(size="1", index=index, doc_type=doc_type, fields="@timestamp", sort="@timestamp:desc",
+                        body={
+                            "query":
+                                {"match_all": {} }
+                        }
+                        )
 
     debug("get_latest_event_timestamp "+str(res))
 
@@ -154,6 +177,7 @@ def to_object(res):
         # I've failed constructing the proper ES query to search by host.
         # Ugly workaround. Shame on me :(
         host = str(hit['fields']['host'][0])
+        ### Bad
         if host_to_search in host:
             id = str(hit['_id'])
             timestamp = str(hit['sort'][0])
@@ -162,9 +186,11 @@ def to_object(res):
             # message = hit['fields']['message'][0]
             # message = message.decode("unicode")
             try:
-                message = str(hit['fields']['message'][0])
+                # message = str(hit['fields']['message'][0])
+                message = hit['fields']['message'][0]
             except:
                 print "ERROR: *** ASCII out of range" + message + " ***"
+                exit(1)
 
             # Every new event becomes a new key in the dictionary. Duplicated events (_id) cancel themselves (Only a copy remains)
             # In case an event is retrieved multiple times it won't cause duplicates.
@@ -219,9 +245,11 @@ def purge_event_pool(event_pool):
     for event in sorted(to_print,key=getKey):
         # print_event_by_event(event)
         if show_headers:
-            print_pool.append(str(from_epoch_milliseconds_to_string(event['timestamp']) + " " + event['host'] + " " + event['type'] + " " + event['message']) + '\n')
+            print_pool.append(from_epoch_milliseconds_to_string(event['timestamp']) + " " + event['host'] + " " + event['type'] + " " + event['message'] + '\n')
+            # print_pool.append(str(from_epoch_milliseconds_to_string(event['timestamp']) + " " + event['host'] + " " + event['type'] + " " + event['message']) + '\n')
         else:
-            print_pool.append(str(event['message']) + '\n')
+            print_pool.append(event['message'] + '\n')
+            # print_pool.append(str(event['message']) + '\n')
         # print_pool.append(str(from_epoch_milliseconds_to_string(event['timestamp']) + " " + event['host'] + " " + event['type'] + " " +event['message'])[0:width] + '\n')
         # print_pool.append(str(from_epoch_milliseconds_to_string(event['timestamp']) + " " + event['frontal'] + " " + event['type'] + " " +event['message'])[0:width] + '\n')
 
@@ -231,20 +259,9 @@ def purge_event_pool(event_pool):
 
 
 def query_test(from_date_time):
-    res = es.search(size="3", index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
+    res = es.search(size="30", index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
                     sort="@timestamp:asc",
-                    body={
-                          "query": {
-                            "filtered": {
-                              "query": { "match": {"host":"s1-ejm-b-euw.ej.mttnow.com"} },
-                              "filter": {
-                                "range": {
-                                  "@timestamp": {"gte": from_date_time}
-                                }
-                              }
-                            }
-                          }
-                        }
+                    body={'query': {'match_phrase': {'host': host_to_search}}}
                     )
     return res
 
@@ -255,55 +272,95 @@ def search_events(from_date_time):
         debug("search_events: from_date_time: "+from_date_time)
     # https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl-range-query.html
     # http://elasticsearch-py.readthedocs.io/en/master/api.html#elasticsearch.Elasticsearch.search
-    if host_to_search != "":
+    if host_to_search:
         debug("query: host: "+host_to_search)
-        res = es.search(size="10000", index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
-                    sort="@timestamp:asc",
-                    body={
-                        "query": {
-                            "filtered": {
-                                # "query": {"match": {"host": host}},
-                                # "query": {"wildcard": {"host": "s*"}},
-                                "query": {"match": {"host": host_to_search}},
-                                "filter": {
-                                    "range": {
-                                        "@timestamp": {"gte": from_date_time}
+        # res = es.search(size="10000", index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
+        #             sort="@timestamp:asc",
+        #             body={
+        #                 "query": {
+        #                     "filtered": {
+        #                         # "query": {"match": {"host": host}},
+        #                         # "query": {"wildcard": {"host": "s*"}},
+        #                         "query": {"match_phrase'": {"host": host_to_search}},
+        #                         "filter": {
+        #                             "range": {
+        #                                 "@timestamp": {"gte": from_date_time}
+        #                             }
+        #                         }
+        #                     }
+        #                 }
+        #             }
+        #             )
+
+
+        # res = es.search(size="10000", index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
+        #                 sort="@timestamp:asc",
+        #                 body={
+        #                     "query": {
+        #                         "filtered": {
+        #                             "filter": {
+        #                                 "and": [
+        #                                     {
+        #                                         # "range":{
+        #                                         #     "@timestamp":{"gte": from_date_time, "lte": to_date_time }
+        #                                         # }
+        #
+        #                                         "range": {
+        #                                             "@timestamp": {"gte": from_date_time}
+        #                                         }
+        #                                     },
+        #                                     {
+        #                                         # "term":{"_type": doc_type}
+        #                                         "match_phrase": {"host": host_to_search }
+        #                                         # "term": { "host": "s1" }
+        #                                     }
+        #
+        #                                 ]
+        #                             }
+        #                         }
+        #                     }
+        #                 }
+        #                 )
+
+        res = es.search(size="10000", index=index, doc_type=doc_type, fields="@timestamp,message,path,host", sort="@timestamp:asc",
+                        body={
+                            "query": {
+                                "filtered": {
+                                    "query": {"match_phrase": {"host": host_to_search }},
+                                    "filter": {
+                                        "range": {
+                                            "@timestamp": {"gte": from_date_time }
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
-                    )
+                        )
 
     else:
-        res = es.search(size="10000", index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
-                    sort="@timestamp:asc",
-                    body={
-                        "query": {
-                            "filtered": {
-                                "filter": {
-                                    "and": [
-                                        {
-                                            # "range":{
-                                            #     "@timestamp":{"gte": from_date_time, "lte": to_date_time }
-                                            # }
-
-                                            "range": {
-                                                "@timestamp": {"gte": from_date_time}
+        res = es.search(size="10000", index=index, doc_type=doc_type, fields="@timestamp,message,path,host", sort="@timestamp:asc",
+                        body={
+                            "query": {
+                                "filtered": {
+                                    "filter": {
+                                        "and": [
+                                            {
+                                                "range": {
+                                                    "@timestamp": {"gte": from_date_time}
+                                                }
+                                            },
+                                            {
+                                                # "term":{"_type": doc_type}
+                                                # "term": {"fields": {"host": "s1" } }
+                                                # "term": { "host": "s1" }
                                             }
-                                        },
-                                        {
-                                            # "term":{"_type": doc_type}
-                                            # "term": {"fields": {"host": "s1" } }
-                                            # "term": { "host": "s1" }
-                                        }
 
-                                    ]
+                                        ]
+                                    }
                                 }
                             }
                         }
-                    }
-                    )
+                        )
 
     if DEBUG:
         debug("ES search execution time: "+str( int(datetime.datetime.utcnow().strftime('%s%f')[:-3]) - current_time)+"ms" )
@@ -453,14 +510,12 @@ class Threading (threading.Thread):
 
 debug("main: now "+from_epoch_milliseconds_to_string(datetime.datetime.utcnow().strftime('%s%f')[:-3]))
 
-interval = 500
+interval = 1000 # milliseconds
 
 # { "_id": {"timestamp":"sort(in milliseconds)", "host":"", "type":"", "message":"") }
 event_pool = {}
 
 print_pool = []
-
-width = 200
 
 # host_to_search = ""
 
@@ -479,28 +534,29 @@ else:
 # Go 10 seconds to the past. There is where we place "in the past" pointer to give time to ES to consolidate its index.
 ten_seconds_ago = latest_event_timestamp - to_the_past
 
-# ###
-# # Initial load
-# from_date_time = from_epoch_milliseconds_to_string(ten_seconds_ago)
-# if DUMMY:
-#     res = search_events_dummy_load(from_date_time)
-# else:
-#     res = search_events(from_date_time)
-#
-# debug("Initial load: from_date_time " + from_date_time)
-# debug("Initial load: hits: " + str(len(res['hits']['hits'])))
-#
-# if len(res['hits']['hits']) == 0:
-#     debug("Initial load: Empty response!")
-# else:
-#     # Add all the events in the response into the event_pool
-#     to_object(res)
-#
-#     # Print and purge oldest events in the pool
-#     purge_event_pool(event_pool)
-#
-# wait(interval)
-# ###
+
+###
+# Initial load
+from_date_time = from_epoch_milliseconds_to_string(ten_seconds_ago)
+if DUMMY:
+    res = search_events_dummy_load(from_date_time)
+else:
+    res = search_events(from_date_time)
+
+debug("Initial load: from_date_time " + from_date_time)
+debug("Initial load: hits: " + str(len(res['hits']['hits'])))
+
+if len(res['hits']['hits']) == 0:
+    debug("Initial load: Empty response!")
+else:
+    # Add all the events in the response into the event_pool
+    to_object(res)
+
+    # Print and purge oldest events in the pool
+    purge_event_pool(event_pool)
+
+what_to_do_while_we_wait()
+###
 
 thread = Threading(1,"Thread-1", ten_seconds_ago)
 
