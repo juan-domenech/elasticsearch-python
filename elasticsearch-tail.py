@@ -5,20 +5,21 @@ from argparse import ArgumentParser
 import threading
 from random import randint
 import platform
+import re
 
 try:
     from elasticsearch import Elasticsearch
 except:
     print "ERROR: elasticsearch module not installed. Run 'sudo pip install elasticsearch'."
+    exit(1)
 
 # To-Do:
-# ! Include 'host' (and later others like 'level') as a searchable field on the main ES query
-# ! Use the additional term (host, level, etc.) in get_latest_event
+# ! Detect and break gracefully with Ctrl-C
+# ! Keep time-in-the-past frozen when there are no new results are recover once they are to avoid gaps
+# Include other fields (like 'level') as a searchable field on the main ES query
 # Check the last-event-pointer going ahead overtime beyond the 10s boundary and adjust size of buffer
 # Secondary sort of results by additional keys for events on the same timestamp
 # Try/detect missing todays logstash index and go to the past searching for the latest one available
-# Keep time-in-the-past frozen when there are no new results are recover once they are to avoid gaps
-# Detect and break gracefully with Ctrl-C
 # Detect ES timeouts (in searching and in get_last_event)
 
 # In case of error:
@@ -28,55 +29,81 @@ except:
 # Use a non HTTPS URL
 
 # Arguments parsing
-parser = ArgumentParser(description='Unix like tail command for Elastisearch')
-parser.add_argument('-e', '--endpoint', help='ES endpoint URL', default='es:80')
+parser = ArgumentParser(description='Unix like tail command for Elastisearch.')
+parser.add_argument('-e', '--endpoint', help='ES endpoint URL', required=True)
 parser.add_argument('-t', '--type', help='Doc_Type: apache, java, tomcat,... ', default='apache')
 parser.add_argument('-i', '--index', help='Index name. If none then logstash-%Y.%m.%d will be used.')
-parser.add_argument('-f', '--nonstop', help='Non stop. Continous tailing', action="store_true")
+parser.add_argument('-c', '--host', help='Hostname to search (optional).')
+parser.add_argument('-f', '--nonstop', help='Non stop. Continuous tailing.', action="store_true")
+parser.add_argument('-n', '--docs', help='Number of documents.', default=10)
 parser.add_argument('-s', '--showheaders', help='Show @timestamp, hostname and type fields in the output.', action="store_true")
-parser.add_argument('-c', '--host', help='Hostname to search (optional)')
 parser.add_argument('-d', '--debug', help='Debug', action="store_true")
+
 args = parser.parse_args()
 
-# Elasticsearch endpoint hostname:port
-endpoint = args.endpoint
-#
+def debug(message):
+    if DEBUG:
+        print "DEBUG " + str(message)
+
+def normalize_endpoint(endpoint):
+    end_with_number = re.compile(":\d+$")
+
+    if endpoint[0:5] == "http:" and not end_with_number.search(endpoint):
+        endpoint = endpoint+":80"
+        return endpoint
+
+    if endpoint[0:6] == "https:" and not end_with_number.search(endpoint):
+        endpoint = endpoint+":443"
+        return endpoint
+
+    if not end_with_number.search(endpoint):
+        endpoint = endpoint+":80"
+        return endpoint
+
+    return endpoint
+
+### Args
+# --endpoint
+if args.endpoint == 'dummy' or args.endpoint == 'DUMMY':
+    DUMMY = True
+    print "INFO: Activating Dummy Load"
+else:
+    DUMMY = False
+    endpoint = normalize_endpoint(args.endpoint)
+# --type
 doc_type = args.type
-#
-# host = args.host
+# --index
 if not args.index:
     index = datetime.datetime.utcnow().strftime("logstash-%Y.%m.%d")
 else:
     index = args.index
-# debug = None or debug != None
+# --debug
 if args.debug:
     DEBUG = args.debug
 else:
     DEBUG = None
-# Dummy Load
-if args.endpoint == 'dummy' or args.endpoint == 'DUMMY':
-    DUMMY = True
-    print "Activating Dummy Load"
-else:
-    DUMMY = False
-# Hostname to search (Optional)
+# --host
 if args.host:
     host_to_search = args.host
 else:
     host_to_search = ''
-# Show headers. Show @timestamp, hostname and type columns from the output.
+# --showheaders. Show @timestamp, hostname and type columns from the output.
 if args.showheaders:
     show_headers = True
 else:
     show_headers = False
-# Non Stop
+# --nonstop
 if args.nonstop:
     non_stop = True
 else:
     non_stop = False
+# -n --docs
+docs = args.docs
+
+###
 
 # Workaround to make it work in AWS AMI Linux
-# Python in AWS fails to locate the CA to validate the ES endpoint SSL and we need to specify it :(
+# Python in AWS fails to locate the CA to validate the ES SSL endpoint and we need to specify it :(
 # https://access.redhat.com/articles/2039753
 if platform.platform()[0:5] == 'Linux':
     ca_certs = '/etc/pki/tls/certs/ca-bundle.crt'
@@ -85,34 +112,19 @@ else:
     ca_certs = None
 
 
-def debug(message):
-    if DEBUG:
-        print "DEBUG "+str(message)
-
 def from_epoch_milliseconds_to_string(epoch_milli):
     return str(datetime.datetime.utcfromtimestamp( float(str( epoch_milli )[:-3]+'.'+str( epoch_milli )[-3:]) ).strftime('%Y-%m-%dT%H:%M:%S.%f'))[:-3]+"Z"
 
+
 def from_epoch_seconds_to_string(epoch_secs):
     return from_epoch_milliseconds_to_string(epoch_secs * 1000)
+
 
 def from_string_to_epoch_milliseconds(string):
     epoch = datetime.datetime(1970, 1, 1)
     pattern = '%Y-%m-%dT%H:%M:%S.%fZ'
     milliseconds =  int(str(int((datetime.datetime.strptime(from_date_time, pattern) - epoch).total_seconds()))+from_date_time[-4:-1])
     return milliseconds
-
-# def print_event_by_key(event):
-#     event = event_pool[event]
-#     # print str(datetime.datetime.utcfromtimestamp( float(str( event['timestamp'] )[:-3]+'.'+str( event['timestamp'] )[-3:]) ).strftime('%Y-%m-%dT%H:%M:%S.%f'))[:-3]+"Z "+event['host']+" "+event['type']+" "+event['message']
-#     # sys.stdout.write( str(datetime.datetime.utcfromtimestamp( float(str( event['timestamp'] )[:-3]+'.'+str( event['timestamp'] )[-3:]) ).strftime('%Y-%m-%dT%H:%M:%S.%f'))[:-3]+"Z "+event['host']+" "+event['type']+" "+event['message']+'\n' )
-#     sys.stdout.write( from_epoch_milliseconds_to_string(event['timestamp'])+" "+event['host']+" "+event['type']+" "+event['message']+'\n' )
-#     sys.stdout.flush()
-
-
-# def print_event_by_event(event):
-#     # sys.stdout.write( from_epoch_milliseconds_to_string(event['timestamp'])+" "+event['host']+" "+event['type']+" "+event['message']+'\n' )
-#     # sys.stdout.flush()
-#     print_pool.append(str(from_epoch_milliseconds_to_string(event['timestamp'])+" "+event['host']+" "+event['type']+" "+event['message'])[0:width]+'\n' )
 
 
 def get_latest_event_timestamp(index):
@@ -139,8 +151,8 @@ def get_latest_event_timestamp(index):
     # On To-Do: to go a logstash index back trying to find the last event (it might be midnight...)
     if len(res['hits']['hits']) != 0:
         timestamp = res['hits']['hits'][0]['sort'][0]
-        # Discard milliseconds and round down to seconds
-        timestamp = (timestamp/1000)*1000
+        # # Discard milliseconds and round down to seconds
+        # timestamp = (timestamp/1000)*1000
         debug("get_latest_event_timestamp "+str(timestamp)+" "+from_epoch_milliseconds_to_string(timestamp))
         if DEBUG:
             debug("ES get_lastest_event execution time: " + str(int(datetime.datetime.utcnow().strftime('%s%f')[:-3]) - current_time) + "ms")
@@ -221,8 +233,8 @@ def get_latest_event_timestamp_dummy_load(index):
     # Return current time as fake lastest event in ES
     timestamp = int(datetime.datetime.utcnow().strftime('%s%f')[:-3]) - 20000
 
-    # Discard milliseconds and round down to seconds
-    timestamp = (timestamp/1000)*1000
+    # # Discard milliseconds and round down to seconds
+    # timestamp = (timestamp/1000)*1000
 
     debug("get_latest_event_timestamp_dummy_load "+from_epoch_milliseconds_to_string(timestamp))
     return timestamp
@@ -267,11 +279,6 @@ def to_object(res):
 #         oldest = int(sorted(list)[0])
 #         debug("get_oldest_in_the_pool: "+str(oldest)+" "+from_epoch_milliseconds_to_string(int(oldest)))
 #         return oldest
-
-
-# # Sort by timestamp
-# def getKey(item):
-#     return item['timestamp']
 
 
 def purge_event_pool(event_pool):
@@ -575,7 +582,7 @@ event_pool = {}
 
 print_pool = []
 
-docs = 10
+# docs = 10
 
 to_the_past = 10000 # milliseconds
 
@@ -584,7 +591,7 @@ if not DUMMY:
     es = Elasticsearch([endpoint],verify_certs=True, ca_certs=ca_certs)
 
 
-# When under -f just get the latest and exit
+# When not under -f just get the latest and exit
 if non_stop == False:
     get_latest_events(index)
     exit(0)
@@ -599,28 +606,28 @@ else:
 # Go 10 seconds to the past. There is where we place "in the past" pointer to give time to ES to consolidate its index.
 ten_seconds_ago = latest_event_timestamp - to_the_past
 
-###
-# Initial load
-from_date_time = from_epoch_milliseconds_to_string(ten_seconds_ago)
-if DUMMY:
-    res = search_events_dummy_load(from_date_time)
-else:
-    res = search_events(from_date_time)
-
-debug("Initial load: from_date_time " + from_date_time)
-debug("Initial load: hits: " + str(len(res['hits']['hits'])))
-
-if len(res['hits']['hits']) == 0:
-    debug("Initial load: Empty response!")
-else:
-    # Add all the events in the response into the event_pool
-    to_object(res)
-
-    # Print and purge oldest events in the pool
-    purge_event_pool(event_pool)
-
-what_to_do_while_we_wait()
-###
+# ###
+# # Initial load
+# from_date_time = from_epoch_milliseconds_to_string(ten_seconds_ago)
+# if DUMMY:
+#     res = search_events_dummy_load(from_date_time)
+# else:
+#     res = search_events(from_date_time)
+#
+# debug("Initial load: from_date_time " + from_date_time)
+# debug("Initial load: hits: " + str(len(res['hits']['hits'])))
+#
+# if len(res['hits']['hits']) == 0:
+#     debug("Initial load: Empty response!")
+# else:
+#     # Add all the events in the response into the event_pool
+#     to_object(res)
+#
+#     # Print and purge oldest events in the pool
+#     purge_event_pool(event_pool)
+#
+# what_to_do_while_we_wait()
+# ###
 
 thread = Threading(1,"Thread-1", ten_seconds_ago)
 
@@ -628,14 +635,6 @@ while True:
 
     # From timestamp in milliseconds to Elasticsearch format (seconds.milliseconds). i.e: 2016-07-14T13:37:45.000Z
     from_date_time = from_epoch_milliseconds_to_string(ten_seconds_ago)
-
-    # if DUMMY:
-    #     res = search_events_dummy_load(ten_seconds_ago)
-    # else:
-    #     res = search_events(ten_seconds_ago)
-    #
-    # # Add all the events in the response into the event_pool
-    # to_object(res)
 
     if not thread.isAlive():
         thread = Threading(1,"Thread-1", from_date_time)
