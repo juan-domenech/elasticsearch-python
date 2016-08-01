@@ -30,10 +30,14 @@ except:
 
 # Arguments parsing
 parser = ArgumentParser(description='Unix like tail command for Elastisearch.')
-parser.add_argument('-e', '--endpoint', help='ES endpoint URL', required=True)
+parser.add_argument('-e', '--endpoint', help='ES endpoint URL.', required=True)
 parser.add_argument('-t', '--type', help='Doc_Type: apache, java, tomcat,... ', default='apache')
 parser.add_argument('-i', '--index', help='Index name. If none then logstash-%Y.%m.%d will be used.')
 parser.add_argument('-c', '--host', help='Hostname to search (optional).')
+parser.add_argument('-l', '--level', help='Level.')
+parser.add_argument('-j', '--javaclass', help='Java Class.')
+parser.add_argument('-r', '--httpresponse', help='HTTP Server Response.')
+parser.add_argument('-m', '--method', help='HTTP Request Method.')
 parser.add_argument('-f', '--nonstop', help='Non stop. Continuous tailing.', action="store_true")
 parser.add_argument('-n', '--docs', help='Number of documents.', default=10)
 parser.add_argument('-s', '--showheaders', help='Show @timestamp, hostname and type fields in the output.', action="store_true")
@@ -98,7 +102,29 @@ if args.nonstop:
 else:
     non_stop = False
 # -n --docs
-docs = args.docs
+docs = int(args.docs)
+if docs < 1 or docs > 10000:
+    print "ERROR: Document range has to be between 1 and 10000"
+    exit(1)
+# --level
+if args.level:
+    field1 = 'level'
+    value1 = args.level
+# --javaclass
+elif args.javaclass:
+    field1 = 'class'
+    value1 = args.javaclass
+# --httpresponse
+elif args.httpresponse:
+    field1 = 'server_response'
+    value1 = args.httpresponse
+# --method
+elif args.method:
+    field1 = 'method'
+    value1 = args.method
+else:
+    field1 = ''
+    value1 = ''
 
 ###
 
@@ -324,11 +350,104 @@ def purge_event_pool(event_pool):
 
 
 def query_test(from_date_time):
-    res = es.search(size="30", index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
-                    sort="@timestamp:asc",
-                    body={'query': {'match_phrase': {'host': host_to_search}}}
-                    )
-    return res
+    global event_pool
+    global print_pool
+    to_print = []
+
+    if field1:
+        res = es.search(size="30", index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
+                        sort="@timestamp:asc",
+                        # body={
+                        #     "query": {
+                        #         "bool": {
+                        #             "must": [
+                        #                 {
+                        #                     "match_phrase": {"host": host_to_search}
+                        #                 },
+                        #                 {
+                        #                     "match": {"level": "WARN"}
+                        #                 }
+                        #             ]
+                        #         }
+                        #     }
+                        # }
+                        body = {
+                            "query": {
+                                "filtered": {
+                                    "query": {
+                                        "bool": {
+                                            "must": [
+                                                {
+                                                    "match_phrase": {"host": host_to_search}
+                                                },
+                                                {
+                                                    "match": {field1: value1}
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    "filter": {
+                                        "range": {
+                                            "@timestamp": {"gte": from_date_time}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        )
+    else:
+        res = es.search(size="30", index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
+                        sort="@timestamp:asc",
+                        body={
+                            "query": {
+                                "filtered": {
+                                    "query": {
+                                        "bool": {
+                                            "must": [
+                                                {
+                                                    "match_phrase": {"host": host_to_search}
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    "filter": {
+                                        "range": {
+                                            "@timestamp": {"gte": from_date_time}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        )
+
+
+    if len(res['hits']['hits']) != 0:
+        timestamp = res['hits']['hits'][0]['sort'][0]
+
+        to_object(res)
+
+        #### Function needed here (and for purge() too)
+
+        for event in event_pool:
+            to_print.append(event_pool[event])
+
+        # Sort by timestamp
+        def getKey(item):
+            return item['timestamp']
+
+        for event in sorted(to_print, key=getKey):
+            if show_headers:
+                print_pool.append(
+                    from_epoch_milliseconds_to_string(event['timestamp']) + " " + event['host'] + " " + event[
+                        'type'] + " " + event['message'] + '\n')
+            else:
+                print_pool.append(event['message'] + '\n')
+
+        what_to_do_while_we_wait()
+        print_pool = []
+        event_pool = {}
+
+    return
 
 
 def search_events(from_date_time):
@@ -589,6 +708,13 @@ to_the_past = 10000 # milliseconds
 # http://elasticsearch-py.readthedocs.io/en/master/
 if not DUMMY:
     es = Elasticsearch([endpoint],verify_certs=True, ca_certs=ca_certs)
+
+
+# latest_event_timestamp = get_latest_event_timestamp(index)
+# ten_seconds_ago = latest_event_timestamp - to_the_past
+# from_date_time = from_epoch_milliseconds_to_string(ten_seconds_ago)
+# query_test(from_date_time)
+# exit()
 
 
 # When not under -f just get the latest and exit
