@@ -3,7 +3,7 @@ import sys
 import time as time2
 from argparse import ArgumentParser
 import threading
-from random import randint
+# from random import randint
 import platform
 import re
 
@@ -15,26 +15,25 @@ except:
 
 # To-Do:
 # ! Detect and break gracefully with Ctrl-C
-# ! Keep time-in-the-past frozen when there are no new results are recover once they are to avoid gaps
-# Include other fields (like 'level') as a searchable field on the main ES query
+# ! Keep time-in-the-past frozen when there are no new results are recover once they appear to avoid potential gaps
 # Check the last-event-pointer going ahead overtime beyond the 10s boundary and adjust size of buffer
-# Secondary sort of results by additional keys for events on the same timestamp
-# Try/detect missing todays logstash index and go to the past searching for the latest one available
+# Secondary sort of results on the same timestamp by additional keys for events
+# Try/detect missing todays logstash index and go to the past searching for the latest one available (midnight scenario)
 # Detect ES timeouts (in searching and in get_last_event)
 
 # In case of error:
 # "elasticsearch.exceptions.ConnectionError: ConnectionError(('Connection failed.', CannotSendRequest())) caused by: ConnectionError(('Connection failed.', CannotSendRequest()))"
 # Update pip install --upgrade urllib3
 # or
-# Use a non HTTPS URL
+# Use a non HTTPS Endpoint URL
 
 # Arguments parsing
-parser = ArgumentParser(description='Unix like tail command for Elastisearch.')
+parser = ArgumentParser(description='Unix like tail command for Elastisearch and Logstash.')
 parser.add_argument('-e', '--endpoint', help='ES endpoint URL.', required=True)
 parser.add_argument('-t', '--type', help='Doc_Type: apache, java, tomcat,... ', default='apache')
 parser.add_argument('-i', '--index', help='Index name. If none then logstash-%Y.%m.%d will be used.')
-parser.add_argument('-c', '--host', help='Hostname to search (optional).')
-parser.add_argument('-l', '--level', help='Level.')
+parser.add_argument('-o', '--hostname', help='Hostname to search (optional).')
+parser.add_argument('-l', '--javalevel', help='Level.')
 parser.add_argument('-j', '--javaclass', help='Java Class.')
 parser.add_argument('-r', '--httpresponse', help='HTTP Server Response.')
 parser.add_argument('-m', '--httpmethod', help='HTTP Request Method.')
@@ -87,13 +86,16 @@ def from_string_to_epoch_milliseconds(string):
 def get_latest_event_timestamp(index):
     if DEBUG:
         current_time = int(datetime.datetime.utcnow().strftime('%s%f')[:-3])
-    if host_to_search:
+    # if host_to_search:
+    #     res = es.search(size=1, index=index, doc_type=doc_type, fields="@timestamp", sort="@timestamp:desc",
+    #                     body={
+    #                         "query":
+    #                             {"match_phrase": {"host": host_to_search}}
+    #                     }
+    #                     )
+    if host_to_search or value1:
         res = es.search(size=1, index=index, doc_type=doc_type, fields="@timestamp", sort="@timestamp:desc",
-                        body={
-                            "query":
-                                {"match_phrase": {"host": host_to_search}}
-                        }
-                        )
+                        body=query_latest)
     else:
         res = es.search(size=1, index=index, doc_type=doc_type, fields="@timestamp", sort="@timestamp:desc",
                         body={
@@ -119,6 +121,7 @@ def get_latest_event_timestamp(index):
         exit(1)
 
 
+# When we are under -f --nonstop
 def get_latest_events(index): # And print them
 
     global event_pool
@@ -128,36 +131,10 @@ def get_latest_events(index): # And print them
     if DEBUG:
         current_time = int(datetime.datetime.utcnow().strftime('%s%f')[:-3])
 
-    # # Mutable query object base
-    # query_search = {
-    #     "query": {
-    #         "filtered": {
-    #             "query": {
-    #                 "bool": {
-    #                     "must": []
-    #                 }
-    #             },
-    #             "filter": {
-    #                 "range": {}
-    #             }
-    #         }
-    #     }
-    # }
-
-    # query_search['query']['filtered']['filter']['range'] = {"@timestamp": {"gte": from_date_time}}
-    # query_search['query']['filtered']['query']['bool']['must'].append({"match_phrase": {"host": host_to_search}})
-    # res = es.search(size=docs, index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
-    #                     sort="@timestamp:desc", body=query_search)
-
-
-    if host_to_search:
+    if host_to_search or value1:
         res = es.search(size=docs, index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
                         sort="@timestamp:desc",
-                        body={
-                            "query":
-                                {"match_phrase": {"host": host_to_search}}
-                        }
-                        )
+                        body=query_latest)
     else:
         res = es.search(size=docs, index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
                         sort="@timestamp:desc",
@@ -263,7 +240,6 @@ def to_object(res):
 
 def purge_event_pool(event_pool):
     debug("purge_event_pool: in: "+str(len(event_pool)))
-    # oldest = get_oldest_in_the_pool()
     debug("purge_event_pool: ten_seconds_ago "+from_epoch_milliseconds_to_string(ten_seconds_ago))
 
     to_print = []
@@ -295,8 +271,8 @@ def purge_event_pool(event_pool):
         else:
             print_pool.append(event['message'] + '\n')
             # print_pool.append(str(event['message']) + '\n')
-        # print_pool.append(str(from_epoch_milliseconds_to_string(event['timestamp']) + " " + event['host'] + " " + event['type'] + " " +event['message'])[0:width] + '\n')
-        # print_pool.append(str(from_epoch_milliseconds_to_string(event['timestamp']) + " " + event['frontal'] + " " + event['type'] + " " +event['message'])[0:width] + '\n')
+            # print_pool.append(str(from_epoch_milliseconds_to_string(event['timestamp']) + " " + event['host'] + " " + event['type'] + " " +event['message'])[0:width] + '\n')
+            # print_pool.append(str(from_epoch_milliseconds_to_string(event['timestamp']) + " " + event['frontal'] + " " + event['type'] + " " +event['message'])[0:width] + '\n')
 
     debug("purge_event_pool: out: "+str(len(event_pool)))
     debug("purge_event_pool: len(print_pool) "+str(len(print_pool)))
@@ -307,8 +283,6 @@ def query_test(from_date_time):
     global event_pool
     global print_pool
     to_print = []
-
-    # if field1:
 
     query_search = { "query": {
                             "filtered": {
@@ -328,80 +302,10 @@ def query_test(from_date_time):
     query_search['query']['filtered']['query']['bool']['must'].append({"match_phrase": {"host": host_to_search}})
     # query_search['query']['filtered']['query']['bool']['must'].append({"match": {field1: value1}})
 
-    # print query_search
-    # exit()
-
     res = es.search(size=docs, index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
                     sort="@timestamp:asc",
                     body=query_search
                     )
-
-        # res = es.search(size=docs, index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
-        #                 sort="@timestamp:asc",
-        #                 # body={
-        #                 #     "query": {
-        #                 #         "bool": {
-        #                 #             "must": [
-        #                 #                 {
-        #                 #                     "match_phrase": {"host": host_to_search}
-        #                 #                 },
-        #                 #                 {
-        #                 #                     "match": {"level": "WARN"}
-        #                 #                 }
-        #                 #             ]
-        #                 #         }
-        #                 #     }
-        #                 # }
-        #                 body = {
-        #                     "query": {
-        #                         "filtered": {
-        #                             "query": {
-        #                                 "bool": {
-        #                                     "must": [
-        #                                         {
-        #                                             "match_phrase": {"host": host_to_search}
-        #                                         },
-        #                                         {
-        #                                             "match": {field1: value1}
-        #                                         }
-        #                                     ]
-        #                                 }
-        #                             },
-        #                             "filter": {
-        #                                 "range": {
-        #                                     "@timestamp": {"gte": from_date_time}
-        #                                 }
-        #                             }
-        #                         }
-        #                     }
-        #                 }
-        #                 )
-    # else:
-    #     res = es.search(size=docs, index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
-    #                     sort="@timestamp:asc",
-    #                     body={
-    #                         "query": {
-    #                             "filtered": {
-    #                                 "query": {
-    #                                     "bool": {
-    #                                         "must": [
-    #                                             {
-    #                                                 "match_phrase": {"host": '*'}
-    #                                                 # "match_phrase": {"host": host_to_search}
-    #                                             }
-    #                                         ]
-    #                                     }
-    #                                 },
-    #                                 "filter": {
-    #                                     "range": {
-    #                                         "@timestamp": {"gte": from_date_time}
-    #                                     }
-    #                                 }
-    #                             }
-    #                         }
-    #                     }
-    #                     )
-
 
     if len(res['hits']['hits']) != 0:
         timestamp = res['hits']['hits'][0]['sort'][0]
@@ -440,96 +344,11 @@ def search_events(from_date_time):
     # http://elasticsearch-py.readthedocs.io/en/master/api.html#elasticsearch.Elasticsearch.search
     # if host_to_search:
     debug("query: host: "+host_to_search)
-        # res = es.search(size="10000", index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
-        #             sort="@timestamp:asc",
-        #             body={
-        #                 "query": {
-        #                     "filtered": {
-        #                         # "query": {"match": {"host": host}},
-        #                         # "query": {"wildcard": {"host": "s*"}},
-        #                         "query": {"match_phrase'": {"host": host_to_search}},
-        #                         "filter": {
-        #                             "range": {
-        #                                 "@timestamp": {"gte": from_date_time}
-        #                             }
-        #                         }
-        #                     }
-        #                 }
-        #             }
-        #             )
-
-
-        # res = es.search(size="10000", index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
-        #                 sort="@timestamp:asc",
-        #                 body={
-        #                     "query": {
-        #                         "filtered": {
-        #                             "filter": {
-        #                                 "and": [
-        #                                     {
-        #                                         # "range":{
-        #                                         #     "@timestamp":{"gte": from_date_time, "lte": to_date_time }
-        #                                         # }
-        #
-        #                                         "range": {
-        #                                             "@timestamp": {"gte": from_date_time}
-        #                                         }
-        #                                     },
-        #                                     {
-        #                                         # "term":{"_type": doc_type}
-        #                                         "match_phrase": {"host": host_to_search }
-        #                                         # "term": { "host": "s1" }
-        #                                     }
-        #
-        #                                 ]
-        #                             }
-        #                         }
-        #                     }
-        #                 }
-        #                 )
 
     query_search['query']['filtered']['filter']['range'] = {"@timestamp": {"gte": from_date_time}}
+
     res = es.search(size="10000", index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
                         sort="@timestamp:asc", body=query_search)
-        # res = es.search(size="10000", index=index, doc_type=doc_type, fields="@timestamp,message,path,host", sort="@timestamp:asc",
-        #                 body={
-        #                     "query": {
-        #                         "filtered": {
-        #                             "query": {"match_phrase": {"host": host_to_search }},
-        #                             "filter": {
-        #                                 "range": {
-        #                                     "@timestamp": {"gte": from_date_time }
-        #                                 }
-        #                             }
-        #                         }
-        #                     }
-        #                 }
-        #                 )
-
-    # else:
-    #     res = es.search(size="10000", index=index, doc_type=doc_type, fields="@timestamp,message,path,host", sort="@timestamp:asc",
-    #                     body={
-    #                         "query": {
-    #                             "filtered": {
-    #                                 "filter": {
-    #                                     "and": [
-    #                                         {
-    #                                             "range": {
-    #                                                 "@timestamp": {"gte": from_date_time}
-    #                                             }
-    #                                         },
-    #                                         {
-    #                                             # "term":{"_type": doc_type}
-    #                                             # "term": {"fields": {"host": "s1" } }
-    #                                             # "term": { "host": "s1" }
-    #                                         }
-    #
-    #                                     ]
-    #                                 }
-    #                             }
-    #                         }
-    #                     }
-    #                     )
 
     if DEBUG:
         debug("ES search execution time: "+str( int(datetime.datetime.utcnow().strftime('%s%f')[:-3]) - current_time)+"ms" )
@@ -583,6 +402,7 @@ def what_to_do_while_we_wait():
 #         to_object(res)
 
 
+# ES Search simulator for testing purposes
 def search_events_dummy_load(from_date_time):
     """
     res = {
@@ -695,7 +515,7 @@ print_pool = []
 
 to_the_past = 10000  # milliseconds
 
-# Mutable query object base
+# Mutable query object base for main search
 query_search = {
     "query": {
         "filtered": {
@@ -710,6 +530,19 @@ query_search = {
         }
     }
 }
+# and for non continuous search (datetime filter not necessary)
+query_latest = {
+    "query": {
+        "filtered": {
+            "query": {
+                "bool": {
+                    "must": []
+                }
+            }
+        }
+    }
+}
+
 
 ### Args
 # --endpoint
@@ -726,15 +559,11 @@ if not args.index:
     index = datetime.datetime.utcnow().strftime("logstash-%Y.%m.%d")
 else:
     index = args.index
-# # --debug
-# if args.debug:
-#     DEBUG = args.debug
-# else:
-#     DEBUG = None
 # --host
-if args.host:
-    host_to_search = args.host
+if args.hostname:
+    host_to_search = args.hostname
     query_search['query']['filtered']['query']['bool']['must'].append({"match_phrase": {"host": host_to_search}})
+    query_latest['query']['filtered']['query']['bool']['must'].append({"match_phrase": {"host": host_to_search}})
 else:
     host_to_search = ''
 # --showheaders. Show @timestamp, hostname and type columns from the output.
@@ -753,33 +582,31 @@ if docs < 1 or docs > 10000:
     print "ERROR: Document range has to be between 1 and 10000"
     exit(1)
 # --level
-if args.level:
-    # field1 = 'level'
-    value1 = args.level
+if args.javalevel:
+    value1 = args.javalevel
     query_search['query']['filtered']['query']['bool']['must'].append({"match": {"level": value1}})
+    query_latest['query']['filtered']['query']['bool']['must'].append({"match": {"level": value1}})
 # --javaclass
 elif args.javaclass:
-    # field1 = 'class'
     value1 = args.javaclass
     query_search['query']['filtered']['query']['bool']['must'].append({"match": {"class": value1}})
+    query_latest['query']['filtered']['query']['bool']['must'].append({"match": {"class": value1}})
 # --httpresponse
 elif args.httpresponse:
-    # field1 = 'server_response'
     value1 = args.httpresponse
     query_search['query']['filtered']['query']['bool']['must'].append({"match": {"server_response": value1}})
+    query_latest['query']['filtered']['query']['bool']['must'].append({"match": {"server_response": value1}})
 # --method
 elif args.httpmethod:
-    # field1 = 'method'
-    value1 = args.method
+    value1 = args.httpmethod
     query_search['query']['filtered']['query']['bool']['must'].append({"match": {"method": value1}})
+    query_latest['query']['filtered']['query']['bool']['must'].append({"match": {"method": value1}})
 else:
-    # field1 = ''
     value1 = ''
 
-###
 
 # Workaround to make it work in AWS AMI Linux
-# Python in AWS fails to locate the CA to validate the ES SSL endpoint and we need to specify it :(
+# Python in AWS fails to locate the CA to validate the ES SSL endpoint and we need to specify it
 # https://access.redhat.com/articles/2039753
 if platform.platform()[0:5] == 'Linux':
     ca_certs = '/etc/pki/tls/certs/ca-bundle.crt'
@@ -787,13 +614,9 @@ else:
     # On the other side, in OSX works like a charm.
     ca_certs = None
 
-
-
-
 # http://elasticsearch-py.readthedocs.io/en/master/
 if not DUMMY:
     es = Elasticsearch([endpoint],verify_certs=True, ca_certs=ca_certs)
-
 
 # latest_event_timestamp = get_latest_event_timestamp(index)
 # ten_seconds_ago = latest_event_timestamp - to_the_past
@@ -801,12 +624,10 @@ if not DUMMY:
 # query_test(from_date_time)
 # exit()
 
-
 # When not under -f just get the latest and exit
 if non_stop == False:
     get_latest_events(index)
     exit(0)
-
 
 # Get the latest event timestamp from the Index
 if DUMMY:
