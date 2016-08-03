@@ -6,12 +6,13 @@ import threading
 # from random import randint
 import platform
 import re
+import signal
 
 try:
     from elasticsearch import Elasticsearch
 except:
     print "ERROR: elasticsearch module not installed. Run 'sudo pip install elasticsearch'."
-    exit(1)
+    sys.exit(1)
 
 # To-Do:
 # ! Detect and break gracefully with Ctrl-C
@@ -44,6 +45,10 @@ parser.add_argument('-d', '--debug', help='Debug', action="store_true")
 
 args = parser.parse_args()
 
+# Ctrl+C
+def signal_handler(signal, frame):
+    sys.exit(0)
+
 
 def debug(message):
     if DEBUG:
@@ -52,6 +57,9 @@ def debug(message):
 
 def normalize_endpoint(endpoint):
     end_with_number = re.compile(":\d+$")
+
+    if endpoint[-1:] == '/':
+        endpoint = endpoint[:-1]
 
     if endpoint[0:5] == "http:" and not end_with_number.search(endpoint):
         endpoint = endpoint+":80"
@@ -118,7 +126,7 @@ def get_latest_event_timestamp(index):
         return timestamp
     else:
         print "ERROR: get_latest_event_timestamp: No results"
-        exit(1)
+        sys.exit(1)
 
 
 # When we are under -f --nonstop
@@ -183,7 +191,7 @@ def get_latest_events(index): # And print them
         return timestamp
     else:
         print "ERROR: get_latest_events: No results"
-        exit(1)
+        sys.exit(1)
 
 
 def get_latest_event_timestamp_dummy_load(index):
@@ -214,7 +222,7 @@ def to_object(res):
             message = hit['fields']['message'][0]
         except:
             print "ERROR: *** ASCII out of range" + message + " ***"
-            exit(1)
+            sys.exit(1)
 
         # Every new event becomes a new key in the dictionary. Duplicated events (_id) cancel themselves (Only a copy remains)
         # In case an event is retrieved multiple times it won't cause duplicates.
@@ -498,6 +506,9 @@ class Threading (threading.Thread):
 
 ### Main
 
+# Ctrl+C handler
+signal.signal(signal.SIGINT, signal_handler)
+
 # --debug
 if args.debug:
     DEBUG = args.debug
@@ -580,7 +591,7 @@ else:
 docs = int(args.docs)
 if docs < 1 or docs > 10000:
     print "ERROR: Document range has to be between 1 and 10000"
-    exit(1)
+    sys.exit(1)
 # --level
 if args.javalevel:
     value1 = args.javalevel
@@ -622,12 +633,12 @@ if not DUMMY:
 # ten_seconds_ago = latest_event_timestamp - to_the_past
 # from_date_time = from_epoch_milliseconds_to_string(ten_seconds_ago)
 # query_test(from_date_time)
-# exit()
+# sys.exit()
 
 # When not under -f just get the latest and exit
 if non_stop == False:
     get_latest_events(index)
-    exit(0)
+    sys.exit(0)
 
 # Get the latest event timestamp from the Index
 if DUMMY:
