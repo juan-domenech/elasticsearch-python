@@ -19,8 +19,8 @@ except:
 # ! Keep time-in-the-past frozen when there are no new results are recover once they appear to avoid potential gaps
 # Check the last-event-pointer going ahead overtime beyond the 10s boundary and adjust size of buffer
 # Secondary sort of results on the same timestamp by additional keys for events
-# Try/detect missing todays logstash index and go to the past searching for the latest one available (midnight scenario)
-# Detect ES timeouts (in searching and in get_last_event)
+# Midnight scenario
+# Detect ES timeouts and missing shards (in searching and in get_last_event)
 
 # In case of error:
 # "elasticsearch.exceptions.ConnectionError: ConnectionError(('Connection failed.', CannotSendRequest())) caused by: ConnectionError(('Connection failed.', CannotSendRequest()))"
@@ -125,7 +125,7 @@ def get_latest_event_timestamp(index):
             debug("ES get_lastest_event execution time: " + str(int(datetime.datetime.utcnow().strftime('%s%f')[:-3]) - current_time) + "ms")
         return timestamp
     else:
-        print "ERROR: get_latest_event_timestamp: No results"
+        print "ERROR: get_latest_events: No results - Index "+index+" empty"
         sys.exit(1)
 
 
@@ -190,7 +190,7 @@ def get_latest_events(index): # And print them
                 int(datetime.datetime.utcnow().strftime('%s%f')[:-3]) - current_time) + "ms")
         return timestamp
     else:
-        print "ERROR: get_latest_events: No results"
+        print "ERROR: get_latest_events: No results - Index "+index+" empty"
         sys.exit(1)
 
 
@@ -220,12 +220,12 @@ def to_object(res):
         # frontal = str(hit['fields']['frontal'][0])
         # message = hit['fields']['message'][0]
         # message = message.decode("unicode")
-        try:
-            # message = str(hit['fields']['message'][0])
-            message = hit['fields']['message'][0]
-        except:
-            print "ERROR: *** ASCII out of range" + message + " ***"
-            sys.exit(1)
+        # try:
+        # message = str(hit['fields']['message'][0])
+        message = hit['fields']['message'][0]
+        # except:
+        #     print "ERROR: *** ASCII out of range" + message + " ***"
+        #     sys.exit(1)
 
         # Every new event becomes a new key in the dictionary. Duplicated events (_id) cancel themselves (Only a copy remains)
         # In case an event is retrieved multiple times it won't cause duplicates.
@@ -481,6 +481,30 @@ def search_events_dummy_load(from_date_time):
     return res
 
 
+# Let's make sure today's index is valid and go to the past if is not
+def check_index(index):
+    debug('check_index: checking '+index)
+    days = 1
+    while True:
+        try:
+            es.search(size=1, index=index, doc_type=doc_type,
+                            body={
+                                "query":
+                                    {"match_all": {}}
+                            }
+                            )
+            return index
+        except:
+            debug('check_index: index '+index+' not found')
+            yesterday = datetime.date.today() - datetime.timedelta(days)
+            index = yesterday.strftime("logstash-%Y.%m.%d")
+            debug('check_index: let\'s try '+str(days)+' days in the past = '+index)
+            days += 1
+            if days > 31:
+                print "ERROR: No index found after trying 30 days in the past"
+                sys.exit(1)
+
+
 def thread_execution(from_date_time):
 
     if DUMMY:
@@ -637,6 +661,9 @@ if not DUMMY:
 # from_date_time = from_epoch_milliseconds_to_string(ten_seconds_ago)
 # query_test(from_date_time)
 # sys.exit()
+
+# Let's make sure that todays Logstash index is present
+index = check_index(index)
 
 # When not under -f just get the latest and exit
 if non_stop == False:
