@@ -210,7 +210,10 @@ def to_object(res):
     debug("to_object: hits: "+str(len(res['hits']['hits'])))
 
     for hit in res['hits']['hits']:
-        host = str(hit['fields']['host'][0])
+        if 'host' in hit:
+            host = str(hit['fields']['host'][0])
+        else:
+            host = 'None'
         id = str(hit['_id'])
         timestamp = str(hit['sort'][0])
         # host = str(hit['fields']['host'][0])
