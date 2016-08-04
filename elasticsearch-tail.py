@@ -6,7 +6,8 @@ import threading
 # from random import randint
 import platform
 import re
-import signal
+import signal # Dealing with Ctrl+C
+import codecs, locale # Dealing with Unicode
 
 try:
     from elasticsearch import Elasticsearch
@@ -15,8 +16,8 @@ except:
     sys.exit(1)
 
 # To-Do:
-# ! Detect and break gracefully with Ctrl-C
-# ! Keep time-in-the-past frozen when there are no new results are recover once they appear to avoid potential gaps
+# ! Intial load + printing
+# Keep time-in-the-past frozen when there are no new results are recover once they appear to avoid potential gaps
 # Check the last-event-pointer going ahead overtime beyond the 10s boundary and adjust size of buffer
 # Secondary sort of results on the same timestamp by additional keys for events
 # Midnight scenario
@@ -42,11 +43,14 @@ parser.add_argument('-f', '--nonstop', help='Non stop. Continuous tailing.', act
 parser.add_argument('-n', '--docs', help='Number of documents.', default=10)
 parser.add_argument('-s', '--showheaders', help='Show @timestamp, hostname and type fields in the output.', action="store_true")
 parser.add_argument('-d', '--debug', help='Debug', action="store_true")
-
 args = parser.parse_args()
+
+# Dealing with Unicode
+sys.stdout = codecs.getwriter(locale.getpreferredencoding())(sys.stdout)
 
 # Ctrl+C
 def signal_handler(signal, frame):
+    debug('Ctrl+C pressed!')
     sys.exit(0)
 
 
@@ -210,7 +214,7 @@ def to_object(res):
     debug("to_object: hits: "+str(len(res['hits']['hits'])))
 
     for hit in res['hits']['hits']:
-        if 'host' in hit:
+        if 'host' in hit['fields']:
             host = str(hit['fields']['host'][0])
         else:
             host = 'None'
@@ -481,7 +485,7 @@ def search_events_dummy_load(from_date_time):
     return res
 
 
-# Let's make sure today's index is valid and go to the past if is not
+# Let's make sure today's index is valid or go to the past if is not
 def check_index(index):
     debug('check_index: checking '+index)
     days = 1
@@ -493,6 +497,7 @@ def check_index(index):
                                     {"match_all": {}}
                             }
                             )
+            debug('check_index: index '+index+' is valid')
             return index
         except:
             debug('check_index: index '+index+' not found')
@@ -543,6 +548,7 @@ else:
     DEBUG = None
 
 debug("main: now " + from_epoch_milliseconds_to_string(datetime.datetime.utcnow().strftime('%s%f')[:-3]))
+debug("main: version 0.9.1")
 
 interval = 1000  # milliseconds
 
@@ -667,7 +673,9 @@ index = check_index(index)
 
 # When not under -f just get the latest and exit
 if non_stop == False:
+    debug('Entering single run...')
     get_latest_events(index)
+    debug('Single run finished. Exiting.')
     sys.exit(0)
 
 # Get the latest event timestamp from the Index
@@ -723,4 +731,4 @@ while True:
     # time2.sleep(interval/1000)
     wait(interval)
 
-    # And here we go again...
+    # And here we go again...import datetime
