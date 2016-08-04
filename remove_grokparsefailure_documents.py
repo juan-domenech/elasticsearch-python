@@ -1,6 +1,8 @@
 import datetime
 from argparse import ArgumentParser
 from elasticsearch import Elasticsearch
+import re
+import platform # Dealing with CA Certs
 
 #
 # Remove ALL _grokparsefailure documents
@@ -16,17 +18,30 @@ parser.add_argument('-e', '--endpoint', help='ES endpoint URL', required=True)
 parser.add_argument('-d', '--debug', help='Debug', action="store_true")
 args = parser.parse_args()
 
-if args.debug:
-    DEBUG = args.debug
-else:
-    DEBUG = None
-
-# Elasticsearch endpoint hostname:port
-endpoint = args.endpoint
-
 def debug(message):
     if DEBUG:
         print "DEBUG "+str(message)
+
+
+def normalize_endpoint(endpoint):
+    end_with_number = re.compile(":\d+$")
+
+    if endpoint[-1:] == '/':
+        endpoint = endpoint[:-1]
+
+    if endpoint[0:5] == "http:" and not end_with_number.search(endpoint):
+        endpoint = endpoint+":80"
+        return endpoint
+
+    if endpoint[0:6] == "https:" and not end_with_number.search(endpoint):
+        endpoint = endpoint+":443"
+        return endpoint
+
+    if not end_with_number.search(endpoint):
+        endpoint = endpoint+":80"
+        return endpoint
+
+    return endpoint
 
 
 def from_epoch_milliseconds_to_string(epoch_milli):
@@ -101,8 +116,26 @@ def remove_ids(documents_to_remove):
                 int(datetime.datetime.utcnow().strftime('%s%f')[:-3]) - current_time) + "ms")
     return
 
+
+if args.debug:
+    DEBUG = args.debug
+else:
+    DEBUG = None
+
+# Workaround to make it work in AWS AMI Linux
+# Python in AWS fails to locate the CA to validate the ES SSL endpoint and we need to specify it
+# https://access.redhat.com/articles/2039753
+if platform.platform()[0:5] == 'Linux':
+    ca_certs = '/etc/pki/tls/certs/ca-bundle.crt'
+else:
+    # On the other side, in OSX works like a charm.
+    ca_certs = None
+
+# Elasticsearch endpoint hostname:port
+endpoint = normalize_endpoint(args.endpoint)
+
 # http://elasticsearch-py.readthedocs.io/en/master/
-es = Elasticsearch([endpoint],verify_certs=True)
+es = Elasticsearch([endpoint], verify_certs=True, ca_certs=ca_certs)
 
 res = search_events()
 
