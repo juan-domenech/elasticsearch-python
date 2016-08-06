@@ -17,6 +17,7 @@ except:
 
 # To-Do:
 # ! Intial load + printing
+# Detect certificate failure and show error (and ignore?)
 # Keep time-in-the-past frozen when there are no new results are recover once they appear to avoid potential gaps
 # Check the last-event-pointer going ahead overtime beyond the 10s boundary and adjust size of buffer
 # Secondary sort of results on the same timestamp by additional keys for events
@@ -33,7 +34,7 @@ except:
 parser = ArgumentParser(description='Unix like tail command for Elastisearch and Logstash.')
 parser.add_argument('-e', '--endpoint', help='ES endpoint URL.', required=True)
 parser.add_argument('-t', '--type', help='Doc_Type: apache, java, tomcat,... ', default='apache')
-parser.add_argument('-i', '--index', help='Index name. If none then logstash-%Y.%m.%d will be used.')
+parser.add_argument('-i', '--index', help='Index name. If none then "logstash-YYYY.MM.DD" will be used.')
 parser.add_argument('-o', '--hostname', help='Hostname to search (optional).')
 parser.add_argument('-l', '--javalevel', help='Level.')
 parser.add_argument('-j', '--javaclass', help='Java Class.')
