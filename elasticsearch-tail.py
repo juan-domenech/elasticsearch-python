@@ -19,16 +19,14 @@ except:
 # ! Intial load + printing
 # Detect certificate failure and show error (and ignore?)
 # Keep time-in-the-past frozen when there are no new results are recover once they appear to avoid potential gaps
-# Check the last-event-pointer going ahead overtime beyond the 10s boundary and adjust size of buffer
-# Secondary sort of results on the same timestamp by additional keys for events
+# Check the last-event-pointer going ahead overtime beyond the 10s boundary and move pointer accordingly
 # Midnight scenario
 # Detect ES timeouts and missing shards (in searching and in get_last_event)
 
 # In case of error:
 # "elasticsearch.exceptions.ConnectionError: ConnectionError(('Connection failed.', CannotSendRequest())) caused by: ConnectionError(('Connection failed.', CannotSendRequest()))"
 # Update pip install --upgrade urllib3
-# or
-# Use a non HTTPS Endpoint URL
+# or use a non HTTPS Endpoint URL
 
 # Arguments parsing
 parser = ArgumentParser(description='Unix like tail command for Elastisearch and Logstash.')
@@ -130,7 +128,8 @@ def get_latest_event_timestamp(index):
             debug("ES get_lastest_event execution time: " + str(int(datetime.datetime.utcnow().strftime('%s%f')[:-3]) - current_time) + "ms")
         return timestamp
     else:
-        print "ERROR: get_latest_events: No results - Index "+index+" empty"
+        print "ERROR: get_latest_events: No results for index="+index+" and type="+doc_type
+        print "INFO: We were unable to find a suitable index/type combination. Please use --index and --type to select a valid index and doc type."
         sys.exit(1)
 
 
@@ -157,7 +156,7 @@ def get_latest_events(index): # And print them
                         }
                         )
 
-    debug("get_latest_events" + str(res))
+    debug("get_latest_events: "+str(res))
 
     # At least one event should return, otherwise we have an issue.
     # On To-Do: to go a logstash index back trying to find the last event (it might be midnight...)
@@ -195,7 +194,8 @@ def get_latest_events(index): # And print them
                 int(datetime.datetime.utcnow().strftime('%s%f')[:-3]) - current_time) + "ms")
         return timestamp
     else:
-        print "ERROR: get_latest_events: No results - Index "+index+" empty"
+        print "ERROR: get_latest_events: No results for index="+index+" and type="+doc_type
+        print "INFO: We were unable to find a suitable index/type combination. Please use --index and --type to select a valid index and doc type."
         sys.exit(1)
 
 
@@ -221,21 +221,11 @@ def to_object(res):
             host = 'None'
         id = str(hit['_id'])
         timestamp = str(hit['sort'][0])
-        # host = str(hit['fields']['host'][0])
-        # frontal = str(hit['fields']['frontal'][0])
-        # message = hit['fields']['message'][0]
-        # message = message.decode("unicode")
-        # try:
-        # message = str(hit['fields']['message'][0])
         message = hit['fields']['message'][0]
-        # except:
-        #     print "ERROR: *** ASCII out of range" + message + " ***"
-        #     sys.exit(1)
 
         # Every new event becomes a new key in the dictionary. Duplicated events (_id) cancel themselves (Only a copy remains)
-        # In case an event is retrieved multiple times it won't cause duplicates.
+        # In case an event is retrieved multiple times (same ID) it won't cause duplicates.
         event_pool[id] = { 'timestamp': timestamp, 'host': host,'type': doc_type, 'message': message }
-        # event_pool[id] = { 'timestamp': timestamp, 'frontal': frontal,'type': doc_type, 'message': message }
 
     debug("to_object: out: len(event_pool) "+str(len(event_pool)))
     return
@@ -260,7 +250,6 @@ def purge_event_pool(event_pool):
 
     to_print = []
     for event in event_pool.copy():
-        # if str(event_pool[event]['timestamp'])[:-3] == oldest_seconds_string:
         event_timestamp = int(event_pool[event]['timestamp'])
         # if event_timestamp >= current time pointer and < (current time pointer + the gap covered by interval):
         # if event_timestamp >= ten_seconds_ago and (event_timestamp < ten_seconds_ago + interval):
@@ -358,7 +347,6 @@ def search_events(from_date_time):
         debug("search_events: from_date_time: "+from_date_time)
     # https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl-range-query.html
     # http://elasticsearch-py.readthedocs.io/en/master/api.html#elasticsearch.Elasticsearch.search
-    # if host_to_search:
     debug("query: host: "+host_to_search)
 
     query_search['query']['filtered']['filter']['range'] = {"@timestamp": {"gte": from_date_time}}
@@ -459,8 +447,8 @@ def search_events_dummy_load(from_date_time):
     debug('search_events_dummy_load: total: '+str(total))
 
     timestamp = from_date_time_milliseconds
-    # fields = {'path': [path], 'host': [host], 'message': [message], '@timestamp': [from_epoch_milliseconds_to_string(timestamp)] }
-    # hit = { 'sort': [timestamp], '_type': doc_type, '_index': index, '_score': score, 'fields': fields, '_id': doc_id }
+    ## fields = {'path': [path], 'host': [host], 'message': [message], '@timestamp': [from_epoch_milliseconds_to_string(timestamp)] }
+    ## hit = { 'sort': [timestamp], '_type': doc_type, '_index': index, '_score': score, 'fields': fields, '_id': doc_id }
 
     for i in range(0,total):
 
@@ -486,29 +474,44 @@ def search_events_dummy_load(from_date_time):
     return res
 
 
-# Let's make sure today's index is valid or go to the past if is not
-def check_index(index):
-    debug('check_index: checking '+index)
-    days = 1
-    while True:
-        try:
-            es.search(size=1, index=index, doc_type=doc_type,
-                            body={
-                                "query":
-                                    {"match_all": {}}
-                            }
-                            )
-            debug('check_index: index '+index+' is valid')
-            return index
-        except:
-            debug('check_index: index '+index+' not found')
-            yesterday = datetime.date.today() - datetime.timedelta(days)
-            index = yesterday.strftime("logstash-%Y.%m.%d")
-            debug('check_index: let\'s try '+str(days)+' days in the past = '+index)
-            days += 1
-            if days > 31:
-                print "ERROR: No index found after trying 30 days in the past"
-                sys.exit(1)
+# Get lastest available index
+def check_index():
+
+    # Get indices list
+    indices = []
+    list = es.indices.get_aliases()
+    for index in list:
+        # We only care for 'logstash-*'
+        if index[0:9] == 'logstash-':
+            indices.append(str(index))
+    debug('check_index: found '+str(len(indices))+' indices')
+    if indices == []:
+        debug('ERROR check_index: No index found! Exiting.')
+        sys.exit(1)
+    indices = sorted(indices, reverse=True)
+    # debug('check_index: checking '+index)
+    # days = 1
+    # while True:
+    #     try:
+    #         es.search(size=1, index=index, doc_type=doc_type,
+    #                         body={
+    #                             "query":
+    #                                 {"match_all": {}}
+    #                         }
+    #                         )
+    #         debug('check_index: index '+index+' is valid')
+    #         return index
+    #     except:
+    #         debug('check_index: index '+index+' not found')
+    #         yesterday = datetime.date.today() - datetime.timedelta(days)
+    #         index = yesterday.strftime("logstash-%Y.%m.%d")
+    #         debug('check_index: let\'s try '+str(days)+' days in the past = '+index)
+    #         days += 1
+    #         if days > 31:
+    #             print "ERROR: No index found after trying 30 days in the past"
+    #             sys.exit(1)
+    debug('check_index: returning "'+indices[0]+'"')
+    return indices[0]
 
 
 def thread_execution(from_date_time):
@@ -553,7 +556,7 @@ debug("main: version 0.9.1")
 
 interval = 1000  # milliseconds
 
-# { "_id": {"timestamp":"sort(in milliseconds)", "host":"", "type":"", "message":"") }
+## { "_id": {"timestamp":"sort(in milliseconds)", "host":"", "type":"", "message":"") }
 event_pool = {}
 
 print_pool = []
@@ -599,11 +602,6 @@ else:
     endpoint = normalize_endpoint(args.endpoint)
 # --type
 doc_type = args.type
-# --index
-if not args.index:
-    index = datetime.datetime.utcnow().strftime("logstash-%Y.%m.%d")
-else:
-    index = args.index
 # --host
 if args.hostname:
     host_to_search = args.hostname
@@ -663,14 +661,18 @@ else:
 if not DUMMY:
     es = Elasticsearch([endpoint],verify_certs=True, ca_certs=ca_certs)
 
+# --index
+if not args.index:
+    index = check_index()
+    # index = datetime.datetime.utcnow().strftime("logstash-%Y.%m.%d")
+else:
+    index = args.index
+
 # latest_event_timestamp = get_latest_event_timestamp(index)
 # ten_seconds_ago = latest_event_timestamp - to_the_past
 # from_date_time = from_epoch_milliseconds_to_string(ten_seconds_ago)
 # query_test(from_date_time)
 # sys.exit()
-
-# Let's make sure that todays Logstash index is present
-index = check_index(index)
 
 # When not under -f just get the latest and exit
 if non_stop == False:
