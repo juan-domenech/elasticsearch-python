@@ -22,6 +22,7 @@ By default ES Type = `apache` is used. You can select other types with `--type`.
 Examples:
 
 `python elasticsearch-tail.py --endpoint http://elak.example.com --type java`
+
 `python elasticsearch-tail.py --endpoint http://elak.example.com --type apache`
 
 By default the latest Logstash Index available is used. Optionally you can specify the desired index name.
@@ -63,6 +64,8 @@ To display events belonging to a particular host and ignore the rest use `--host
 Example:
 
 `python elasticsearch-tail.py --endpoint http://elak.example.com --hostname server1.example.com`
+
+
 
 
 
