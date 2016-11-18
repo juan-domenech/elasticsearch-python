@@ -18,7 +18,7 @@ except:
 # To-Do:
 # ! Intial load + printing
 # Detect certificate failure and show error (and ignore?)
-# Keep time-in-the-past frozen when there are no new results are recover once they appear to avoid potential gaps
+# ! Keep time-in-the-past frozen when there are no new results are recover once they appear to avoid potential gaps
 # Check the last-event-pointer going ahead overtime beyond the 10s boundary and move pointer accordingly
 # Midnight scenario
 # Detect ES timeouts and missing shards (in searching and in get_last_event)
@@ -35,7 +35,7 @@ parser.add_argument('-e', '--endpoint', help='ES endpoint URL.', required=True)
 parser.add_argument('-t', '--type', help='Doc_Type: apache, java, tomcat,... ', default='apache')
 parser.add_argument('-i', '--index', help='Index name. If none then "logstash-YYYY.MM.DD" will be used.')
 parser.add_argument('-o', '--hostname', help='Hostname to search (optional).')
-parser.add_argument('-l', '--javalevel', help='Level.')
+parser.add_argument('-l', '--javalevel', help='Java Level.')
 parser.add_argument('-j', '--javaclass', help='Java Class.')
 parser.add_argument('-r', '--httpresponse', help='HTTP Server Response.')
 parser.add_argument('-m', '--httpmethod', help='HTTP Request Method.')
@@ -129,8 +129,8 @@ def get_latest_event_timestamp(index):
             debug("ES get_lastest_event execution time: " + str(int(datetime.datetime.utcnow().strftime('%s%f')[:-3]) - current_time) + "ms")
         return timestamp
     else:
-        print "ERROR: get_latest_events: No results for index="+index+" and type="+doc_type
-        print "INFO: We were unable to find a suitable index/type combination. Please use --index and --type to select a valid index and doc type."
+        print "ERROR: get_latest_event_timestamp: No results found with the current search criteria under index="+index
+        print "INFO: Please use --index, --type or --hostname"
         sys.exit(1)
 
 
@@ -196,8 +196,8 @@ def get_latest_events(index): # And print them
                 int(datetime.datetime.utcnow().strftime('%s%f')[:-3]) - current_time) + "ms")
         return timestamp # Needed???
     else:
-        print "ERROR: get_latest_events: No results for index="+index+" and type="+doc_type
-        print "INFO: We were unable to find a suitable index/type combination. Please use --index and --type to select a valid index and doc type."
+        print "ERROR: get_latest_events: No results found with the current search criteria under index="+index
+        print "INFO: Please use --index, --type or --hostname"
         sys.exit(1)
 
 
@@ -580,7 +580,7 @@ else:
     DEBUG = None
 
 debug("main: now " + from_epoch_milliseconds_to_string(datetime.datetime.utcnow().strftime('%s%f')[:-3]))
-debug("main: version 0.9.2")
+debug("main: version 0.9.3")
 
 interval = 1000  # milliseconds
 
@@ -773,4 +773,5 @@ while True:
     # time2.sleep(interval/1000)
     wait(interval)
 
-    # And here we go again...import datetime
+    # And here we go again...
+    
