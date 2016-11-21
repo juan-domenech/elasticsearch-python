@@ -30,6 +30,7 @@ parser = ArgumentParser(description='Delete old indices in order to get free spa
 parser.add_argument('-e', '--endpoint', help='ES endpoint URL', required=True)
 parser.add_argument('-d', '--desired', help='Minimum desired free space percentage(%): 20, 30, etc. Default: 30', default=30)
 parser.add_argument('-i', '--indices', help='Minimum number of indices required. Warning! Lowering this may delete the whole cluster. Default: 7', default=7)
+parser.add_argument('-r', '--dryrun', help='Run without deleting anything', action="store_true")
 args = parser.parse_args()
 
 # Elasticsearch endpoint
@@ -39,6 +40,12 @@ print "INFO: endpoint:",endpoint
 desired_free_space = int(args.desired)
 # Fail safe. It is weird to need space with only a week of logs... let's put a limit on what we can delete.
 minimum_indices = int(args.indices)
+# Dry Run
+if args.dryrun:
+    dry_run = True
+    print "INFO: *** Running in Dry Run mode ***"
+else:
+    dry_run = False
 
 # Workaround to make it work in AWS AMI Linux
 # Python in AWS fails to locate the CA to validate the ES endpoint SSL and we need to specify it :(
@@ -90,6 +97,7 @@ def wait(seconds):
 # http://elasticsearch-py.readthedocs.io/en/master/
 # http://charlesleifer.com/blog/setting-up-elasticsearch-with-basic-auth-and-ssl-for-use-with-python/
 es = Elasticsearch([endpoint],verify_certs=True, ca_certs=ca_certs)
+print "INFO: Connecting to:",endpoint
 cluster_name = es.cluster.stats()
 print "INFO: Connected to ES cluster:",cluster_name['cluster_name']
 
@@ -122,12 +130,15 @@ else:
             exit(1)
 
         print "INFO: Removing Index '"+indices[to_remove]+"'..."
-        output = remove_index(indices[to_remove])
-        # print "DEBUG: ",output
-        if not 'acknowledged' in output or output['acknowledged'] != True:
-            print "ERROR: Removing operation failed with error ",output
-            exit(1)
-        wait(60)
+        if dry_run:
+            print "INFO: *** Nothing to remove: We are in Dry Run mode. Skipping! ***"
+        else:
+            output = remove_index(indices[to_remove])
+            # print "DEBUG: ",output
+            if not 'acknowledged' in output or output['acknowledged'] != True:
+                print "ERROR: Removing operation failed with error ",output
+                exit(1)
+            wait(60)
 
         # Check whether we have more space available after deleting one
         free = get_free_space_percentage()
