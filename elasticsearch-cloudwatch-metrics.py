@@ -3,6 +3,8 @@ import re
 import signal  # Dealing with Ctrl+C
 import sys
 import platform
+import boto.ec2.cloudwatch
+
 
 try:
     from elasticsearch import Elasticsearch
@@ -13,6 +15,7 @@ except:
 # Arguments parsing
 parser = ArgumentParser(description='Unix like tail command for Elastisearch and Logstash.')
 parser.add_argument('-e', '--endpoint', help='ES endpoint URL.', required=True)
+parser.add_argument('-r', '--region', help='AWS Region. Default=eu-west-1 ', default='eu-west-1')
 
 parser.add_argument('-d', '--debug', help='Debug', action="store_true")
 args = parser.parse_args()
@@ -61,6 +64,8 @@ if args.debug:
 else:
     DEBUG = None
 
+region = args.region
+
 ### Args
 # --endpoint
 if args.endpoint:
@@ -78,6 +83,8 @@ else:
     # On the other side, in OSX works like a charm.
     ca_certs = None
 
+# CloudWatch
+name_space = 'ElasticSearch'
 
 es = Elasticsearch([endpoint], verify_certs=True, ca_certs=ca_certs)
 
@@ -99,8 +106,12 @@ stats = es.nodes.stats()
 
 # debug(stats)
 
-cluster_name = stats['cluster_name']
+cluster_name = stats['cluster_name'].split(':')[1]
 debug("cluster_name: "+cluster_name)
+
+
+# http://boto.cloudhackers.com/en/latest/ref/cloudwatch.html
+cloudwatch_conn = boto.ec2.cloudwatch.connect_to_region(region)
 
 # number_nodes = len(stats['nodes'])
 # print number_nodes
@@ -119,18 +130,42 @@ for node in stats['nodes']:
 
     non_heap_used_in_bytes = stats['nodes'][node]['jvm']['mem']['non_heap_used_in_bytes']
     debug(node_name+" non_heap_used_in_bytes: "+str(non_heap_used_in_bytes))
+    cloudwatch_conn.put_metric_data(namespace=name_space,
+                                    name=cluster_name + ':' + node_name + ":" + 'non_heap_used_in_bytes',
+                                    value=non_heap_used_in_bytes,
+                                    unit='Bytes')
 
     heap_used_in_bytes = stats['nodes'][node]['jvm']['mem']['heap_used_in_bytes']
     debug(node_name + " heap_used_in_bytes: " + str(heap_used_in_bytes))
+    cloudwatch_conn.put_metric_data(namespace=name_space,
+                                    name=cluster_name + ':' + node_name + ":" + 'heap_used_in_bytes',
+                                    value=heap_used_in_bytes,
+                                    unit='Bytes')
 
     heap_used_percent = stats['nodes'][node]['jvm']['mem']['heap_used_percent']
     debug(node_name + " heap_used_percent: " + str(heap_used_percent))
+    cloudwatch_conn.put_metric_data(namespace=name_space,
+                                    name=cluster_name + ':' + node_name + ":" + 'heap_used_percent',
+                                    value=heap_used_percent,
+                                    unit='Percent')
 
     pool_old_used_in_bytes = stats['nodes'][node]['jvm']['mem']['pools']['old']['used_in_bytes']
     debug(node_name + " pool_old_used_in_bytes: " + str(pool_old_used_in_bytes))
+    cloudwatch_conn.put_metric_data(namespace=name_space,
+                                    name=cluster_name + ':' + node_name + ":" + 'pool_old_used_in_bytes',
+                                    value=pool_old_used_in_bytes,
+                                    unit='Bytes')
 
     pool_young_used_in_bytes = stats['nodes'][node]['jvm']['mem']['pools']['young']['used_in_bytes']
     debug(node_name + " pool_young_used_in_bytes: " + str(pool_young_used_in_bytes))
+    cloudwatch_conn.put_metric_data(namespace=name_space,
+                                    name=cluster_name + ':' + node_name + ":" + 'pool_young_used_in_bytes',
+                                    value=pool_young_used_in_bytes,
+                                    unit='Bytes')
 
     pool_survivor_used_in_bytes = stats['nodes'][node]['jvm']['mem']['pools']['survivor']['used_in_bytes']
     debug(node_name + " pool_survivor_used_in_bytes: " + str(pool_survivor_used_in_bytes))
+    cloudwatch_conn.put_metric_data(namespace=name_space,
+                                    name=cluster_name + ':' + node_name + ":" + 'pool_survivor_used_in_bytes',
+                                    value=pool_survivor_used_in_bytes,
+                                    unit='Bytes')
