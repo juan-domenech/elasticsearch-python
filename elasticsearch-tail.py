@@ -22,7 +22,8 @@ except:
 # Check the last-event-pointer going ahead overtime beyond the 10s boundary and move pointer accordingly
 # Midnight scenario
 # Detect ES timeouts and missing shards (in searching and in get_last_event)
-# Improve dummy-load: Apache time to reflect timestamp, number of docs variable when not -f
+# Improve dummy-load: Timestamp in standard format, Apache number of docs variable when not -f, random number of bytes, --type java,
+# Solve the 10000 limit on the answer from ES
 
 # In case of error:
 # "elasticsearch.exceptions.ConnectionError: ConnectionError(('Connection failed.', CannotSendRequest())) caused by: ConnectionError(('Connection failed.', CannotSendRequest()))"
@@ -93,6 +94,17 @@ def from_string_to_epoch_milliseconds(string):
     pattern = '%Y-%m-%dT%H:%M:%S.%fZ'
     milliseconds =  int(str(int((datetime.datetime.strptime(from_date_time, pattern) - epoch).total_seconds()))+from_date_time[-4:-1])
     return milliseconds
+
+
+def get_latest_event_timestamp_dummy_load(index):
+    # Return current time as fake lastest event in ES
+    timestamp = int(datetime.datetime.utcnow().strftime('%s%f')[:-3]) - 20000
+
+    # # Discard milliseconds and round down to seconds
+    # timestamp = (timestamp/1000)*1000
+
+    debug("get_latest_event_timestamp_dummy_load " + from_epoch_milliseconds_to_string(timestamp))
+    return timestamp
 
 
 def get_latest_event_timestamp(index):
@@ -201,17 +213,6 @@ def get_latest_events(index): # And print them
         sys.exit(1)
 
 
-def get_latest_event_timestamp_dummy_load(index):
-    # Return current time as fake lastest event in ES
-    timestamp = int(datetime.datetime.utcnow().strftime('%s%f')[:-3]) - 20000
-
-    # # Discard milliseconds and round down to seconds
-    # timestamp = (timestamp/1000)*1000
-
-    debug("get_latest_event_timestamp_dummy_load "+from_epoch_milliseconds_to_string(timestamp))
-    return timestamp
-
-
 # Inserts event into event_pool{}
 def to_object(res):
     debug("to_object: in: len(event_pool) "+str(len(event_pool)))
@@ -257,13 +258,18 @@ def purge_event_pool(event_pool):
         # if event_timestamp >= current time pointer and < (current time pointer + the gap covered by interval):
         # if event_timestamp >= ten_seconds_ago and (event_timestamp < ten_seconds_ago + interval):
         # if event_timestamp <= oldest_in_the_pool + interval:
-        if (event_timestamp >= ten_seconds_ago - interval) and event_timestamp < ten_seconds_ago:
+        if event_timestamp >= (ten_seconds_ago - interval) and event_timestamp < ten_seconds_ago:
             # Print and...
+            event_to_print = event_pool[event]
+            # adding event ID
+            event_to_print['id'] = event
             to_print.append(event_pool[event])
             # delete...
             event_pool.pop(event)
         elif event_timestamp < ten_seconds_ago - interval:
             # ...discard what is below last output.
+            debug("purge_event_pool: Discarded event @timestamp " + from_epoch_milliseconds_to_string(event_timestamp) + str(event) )
+            # print "WARNING purge_event_pool: Discarded event with @timestamp "+from_epoch_milliseconds_to_string(event_timestamp)+" "+str(event)
             event_pool.pop(event)
 
     # Sort by timestamp
@@ -274,7 +280,7 @@ def purge_event_pool(event_pool):
     for event in sorted(to_print,key=getKey):
         # print_event_by_event(event)
         if show_headers:
-            print_pool.append(from_epoch_milliseconds_to_string(event['timestamp']) + " " + event['host'] + " " + event['type'] + " " + event['message'] + '\n')
+            print_pool.append(from_epoch_milliseconds_to_string(event['timestamp']) + " " + event['id'] + " " + event['host'] + " " + event['type'] + " " + event['message'] + '\n')
             # print_pool.append(str(from_epoch_milliseconds_to_string(event['timestamp']) + " " + event['host'] + " " + event['type'] + " " + event['message']) + '\n')
         else:
             print_pool.append(event['message'] + '\n')
@@ -369,71 +375,6 @@ def query_test(from_date_time):
     return
 
 
-def search_events(from_date_time):
-    if DEBUG:
-        current_time = int(datetime.datetime.utcnow().strftime('%s%f')[:-3])
-        debug("search_events: from_date_time: "+from_date_time)
-    # https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl-range-query.html
-    # http://elasticsearch-py.readthedocs.io/en/master/api.html#elasticsearch.Elasticsearch.search
-    debug("query: host: "+host_to_search)
-
-    query_search['query']['filtered']['filter']['range'] = {"@timestamp": {"gte": from_date_time}}
-
-    res = es.search(size="10000", index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
-                        sort="@timestamp:asc", body=query_search)
-
-    if DEBUG:
-        debug("ES search execution time: "+str( int(datetime.datetime.utcnow().strftime('%s%f')[:-3]) - current_time)+"ms" )
-    return res
-
-
-def wait(milliseconds):
-    # Current time in Epoch milliseconds
-    current_time = int(datetime.datetime.utcnow().strftime('%s%f')[:-3])
-    final_time = current_time + milliseconds
-    # print "initial",current_time
-    # print "final",final_time
-    # skip = 0
-    # start = 0
-    # cumulative = 1
-    # skip = float(milliseconds)/len(print_pool)
-    # if len(print_pool) != 0:
-    len_print_pool = len(print_pool)
-    if len_print_pool == 0:
-        # len_print_pool = 1
-        debug("wait: len(print_pool) == 0")
-    # jump = int(milliseconds)/len_print_pool+1
-    while final_time > current_time:
-        current_time = int(datetime.datetime.utcnow().strftime('%s%f')[:-3])
-        what_to_do_while_we_wait()
-        # Sleep just a bit to avoid hammering the CPU
-        time2.sleep(.01)
-
-
-def what_to_do_while_we_wait():
-    global print_pool
-    for i in range(0,len( print_pool) ):
-        sys.stdout.write( print_pool[i] )
-        sys.stdout.flush()
-    print_pool = []
-
-
-# def es_search(from_date_time):
-#     # l.acquire()
-#     # if current_process().name == 'Process-1':
-#     # print "I'am", current_process().name
-#     res = search_events(from_date_time)
-#
-#     debug("from_date_time "+from_date_time)
-#     debug("hits: "+str(len(res['hits']['hits'])))
-#
-#     if len(res['hits']['hits']) == 0:
-#         debug("Empty response!")
-#     else:
-#         # Add all the events in the response into the event_pool
-#         to_object(res)
-
-
 # ES Search simulator for testing purposes
 def search_events_dummy_load(from_date_time):
     """
@@ -461,7 +402,9 @@ def search_events_dummy_load(from_date_time):
     score = None # _score
     host = 'server-1.example.com'
     path = '/var/log/httpd/access_log'
-    message = '192.168.1.1, 192.168.1.2, 192.168.1.3 - - [23/Jul/2016:09:23:44 +0000] "GET /dummy.html HTTP/1.1" 200 51 0/823 "Agent" "Referer"'
+    # message = '192.168.1.1, 192.168.1.2, 192.168.1.3 - - '+ datetime.datetime.now().strftime('[%d/%b/%Y:%H:%M:%S.%f +0000]') +' "GET /dummy.html HTTP/1.1" 200 51 0/823 "Agent" "Referer"'
+    message_begining = '192.168.1.1, 192.168.1.2, 192.168.1.3 - - '
+    message_end = ' "GET /dummy.html HTTP/1.1" 200 51 0/823 "Agent" "Referer"'
     # @timestamp
     # _id
     # sort
@@ -481,12 +424,13 @@ def search_events_dummy_load(from_date_time):
     for i in range(0,total):
 
         doc_id = 'ES_DUMMY_ID_'+str(timestamp)[-8:]
-
-        fields = {'path': [path], 'host': [host], 'message': [message], '@timestamp': [from_epoch_milliseconds_to_string(timestamp)] }
+        # print timestamp,doc_id
+        fields = {'path': [path], 'host': [host], 'message': [message_begining + from_epoch_milliseconds_to_string(timestamp) + message_end], '@timestamp': [from_epoch_milliseconds_to_string(timestamp)] }
         hit = { 'sort': [timestamp], '_type': doc_type, '_index': index, '_score': score, 'fields': fields, '_id': doc_id }
         hits.append(hit)
 
         timestamp += 10
+        # timestamp += 2
 
     hits = {'hits':hits}
     hits['total'] = total
@@ -496,10 +440,75 @@ def search_events_dummy_load(from_date_time):
     res['_shards'] = shards
     res['took'] = took
     res['time_out'] = time_out
+
     # Let's simulate that ES takes some time to fulfill the request
     time2.sleep(1.5)
 
     return res
+
+
+def search_events(from_date_time):
+    if DEBUG:
+        current_time = int(datetime.datetime.utcnow().strftime('%s%f')[:-3])
+        debug("search_events: from_date_time: "+from_date_time)
+    # https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl-range-query.html
+    # http://elasticsearch-py.readthedocs.io/en/master/api.html#elasticsearch.Elasticsearch.search
+    debug("query: host: "+host_to_search)
+
+    query_search['query']['filtered']['filter']['range'] = {"@timestamp": {"gte": from_date_time}}
+
+    res = es.search(size="10000", index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
+                        sort="@timestamp:asc", body=query_search)
+
+    if DEBUG:
+        debug("ES search execution time: "+str( int(datetime.datetime.utcnow().strftime('%s%f')[:-3]) - current_time)+"ms" )
+    return res
+
+
+def wait(milliseconds):
+    # Current time in Epoch milliseconds
+    current_time = int(datetime.datetime.utcnow().strftime('%s%f')[:-3])
+    final_time = current_time + milliseconds
+    len_print_pool = len(print_pool)
+
+    if len_print_pool == 0:
+        debug("wait: len(print_pool) == 0")
+
+    while final_time > current_time:
+        current_time = int(datetime.datetime.utcnow().strftime('%s%f')[:-3])
+        what_to_do_while_we_wait()
+        # Sleep just a bit to avoid hammering the CPU (to improve)
+        time2.sleep(.01)
+
+
+def what_to_do_while_we_wait():
+    global print_pool
+    len_print_pool_2 = len( print_pool )
+    wait_interval = interval + .0
+
+    for i in range(0,len_print_pool_2 ):
+        sys.stdout.write( print_pool[i] )
+        sys.stdout.flush()
+
+        time2.sleep( (interval / len_print_pool_2 + .0) / wait_interval )
+
+    print_pool = []
+
+
+# def es_search(from_date_time):
+#     # l.acquire()
+#     # if current_process().name == 'Process-1':
+#     # print "I'am", current_process().name
+#     res = search_events(from_date_time)
+#
+#     debug("from_date_time "+from_date_time)
+#     debug("hits: "+str(len(res['hits']['hits'])))
+#
+#     if len(res['hits']['hits']) == 0:
+#         debug("Empty response!")
+#     else:
+#         # Add all the events in the response into the event_pool
+#         to_object(res)
 
 
 # Get lastest available index
@@ -580,7 +589,7 @@ else:
     DEBUG = None
 
 debug("main: now " + from_epoch_milliseconds_to_string(datetime.datetime.utcnow().strftime('%s%f')[:-3]))
-debug("main: version 0.9.3")
+debug("main: version 0.9.4")
 
 interval = 1000  # milliseconds
 
@@ -756,22 +765,20 @@ thread = Threading(1,"Thread-1", ten_seconds_ago)
 
 while True:
 
-    # From timestamp in milliseconds to Elasticsearch format (seconds.milliseconds). i.e: 2016-07-14T13:37:45.000Z
+    # From timestamp in milliseconds to Elasticsearch format (seconds.milliseconds). i.e: 2016-07-14T13:37:45.123Z
     from_date_time = from_epoch_milliseconds_to_string(ten_seconds_ago)
 
     if not thread.isAlive():
         thread = Threading(1,"Thread-1", from_date_time)
         thread.start()
 
+    # "Send to print" and purge oldest events in the pool
+    purge_event_pool(event_pool)
+
+    # Wait for Elasticsearch to index a bit more of stuff and Print meanwhile
+    wait(interval)
+
     # Move the 'past' pointer one 'interval' ahead
     ten_seconds_ago += interval
 
-    # Print and purge oldest events in the pool
-    purge_event_pool(event_pool)
-
-    # Wait for ES to index a bit more of stuff
-    # time2.sleep(interval/1000)
-    wait(interval)
-
     # And here we go again...
-    
