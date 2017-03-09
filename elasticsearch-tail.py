@@ -93,7 +93,8 @@ def from_epoch_seconds_to_string(epoch_secs):
 def from_string_to_epoch_milliseconds(string):
     epoch = datetime.datetime(1970, 1, 1)
     pattern = '%Y-%m-%dT%H:%M:%S.%fZ'
-    milliseconds =  int(str(int((datetime.datetime.strptime(from_date_time, pattern) - epoch).total_seconds()))+from_date_time[-4:-1])
+    # milliseconds =  int(str(int((datetime.datetime.strptime(from_date_time, pattern) - epoch).total_seconds()))+from_date_time[-4:-1])
+    milliseconds =  int(str(int((datetime.datetime.strptime(string, pattern) - epoch).total_seconds()))+string[-4:-1])
     return milliseconds
 
 
@@ -137,14 +138,14 @@ def check_index():
     return indices[0]
 
 
-def get_latest_event_timestamp_dummy_load(index):
+def get_latest_event_timestamp_dummy_load():
     fake_timestamp = 0
-    #
-    now_fake_timestamp = int(datetime.datetime.utcnow().strftime('%s%f')[:-3]) - 20000
+    # Making up lates_event available in ES from current time - 20000ms in the past (rounding the resulting ms to 000)
+    now_fake_timestamp = int(datetime.datetime.utcnow().strftime('%s')+'000') - 20000
 
     hash_sum = 0
-    # Loop from now-20000 to a second ahead to find a valid dummy timestamp
-    for dummy_timestamp in range (now_fake_timestamp , now_fake_timestamp+2000):
+    # Loop from now-20000 to 10 seconds ahead to find the highest valid dummy timestamp
+    for dummy_timestamp in range(now_fake_timestamp, now_fake_timestamp+10000):
 
         dummy_timestamp_hash = hashlib.md5(str(dummy_timestamp)).hexdigest()
 
@@ -203,7 +204,7 @@ def get_latest_event_timestamp(index):
         sys.exit(1)
 
 
-# When we are under -f --nonstop
+# When we are NOT under -f or --nonstop
 def get_latest_events(index): # And print them
     # global event_pool
     # global print_pool
@@ -222,7 +223,7 @@ def get_latest_events(index): # And print them
                         body={
                             "query":
                                 {"match_all": {}}
-                        }
+                            }
                         )
 
     debug("get_latest_events: "+str(res))
@@ -259,10 +260,9 @@ def get_latest_events(index): # And print them
         #
         # ####
 
-        debug("get_latest_event_timestamp " + str(timestamp) + " " + from_epoch_milliseconds_to_string(timestamp))
+        debug("get_latest_event: timestamp: " + str(timestamp) + " " + from_epoch_milliseconds_to_string(timestamp))
         if DEBUG:
-            debug("get_latest_events: execution time: " + str(
-                int(datetime.datetime.utcnow().strftime('%s%f')[:-3]) - current_time) + "ms")
+            debug("get_latest_events: execution time: " + str(int(datetime.datetime.utcnow().strftime('%s%f')[:-3]) - current_time) + " ms")
         return timestamp # Needed???
     else:
         print "ERROR: get_latest_events: No results found with the current search criteria under index="+index
@@ -292,24 +292,11 @@ def to_object(res):
     return
 
 
-# def get_oldest_in_the_pool(): # timestamp
-#     if len(event_pool) != 0:
-#         list = []
-#         for event in event_pool:
-#             #print event_pool[event]['timestamp']
-#             # if event_pool[event]['timestamp'] <= oldest:
-#             #     oldest = event_pool[event]['timestamp']
-#             list.append(event_pool[event]['timestamp'])
-#         oldest = int(sorted(list)[0])
-#         debug("get_oldest_in_the_pool: "+str(oldest)+" "+from_epoch_milliseconds_to_string(int(oldest)))
-#         return oldest
-
-
 # Get the newest event_timestamp in the event_pool
 def get_newest_event_timestamp(get_newest_event_event_pool_copy):
     temp_timestamp = 0
 
-    #
+    # No events to play with
     if len(get_newest_event_event_pool_copy) == 0:
         return 0
 
@@ -325,35 +312,25 @@ def get_newest_event_timestamp(get_newest_event_event_pool_copy):
         return temp_timestamp
 
 
-
-# Find what's the next available event in the pool given a timestamp without invading the safeguard (to_the_past)
+# Find what's the next available event in the pool given a timestamp, without invading the safeguard (to_the_past)
 def get_pointer_ahead(proposed_timestamp):
     debug('get_pointer_ahead: proposed_timestamp: '+str(proposed_timestamp))
     candidates = []
-    previous_event_timestamp = 0
-    newest_event_timestamp = 0
     get_pointer_ahead_event_pool_copy = event_pool.copy()
 
-    #
+    # No events to play with
     if len(get_pointer_ahead_event_pool_copy) == 0:
         return 0
 
-    # # Get the newest event_timestamp in the event_pool
-    # for event in get_pointer_ahead_event_pool_copy:
-    #     if int(get_pointer_ahead_event_pool_copy[event]['timestamp']) > previous_event_timestamp:
-    #         previous_event_timestamp = int(get_pointer_ahead_event_pool_copy[event]['timestamp'])
-    # # Error when there are events in the event_pool but we can't find any
-    # if previous_event_timestamp == 0:
-    #     print "ERROR get_pointer_ahead: previous_event_timestamp == 0"
-    #     exit(1)
-    # else:
-    #     newest_event_timestamp = previous_event_timestamp
-    # debug('get_pointer_ahead: newest_event_timestamp: ' + str(newest_event_timestamp))
-
     newest_event_timestamp = get_newest_event_timestamp(get_pointer_ahead_event_pool_copy)
 
-    # Loop event_pool searching for timestamps older than the proposed_timestamp
-    # and at the same time not in the range between the newest event in the pool and the 10s safeguard (to_the_past)
+    # Something went wrong. The newest event is older than the one we provided.
+    if newest_event_timestamp <= proposed_timestamp:
+        return 0
+
+    # Loop event_pool searching for timestamps older than the proposed_timestamp and at the same time
+    # not in the range between the newest event in the pool and the 10s safeguard (to_the_past)
+    # using newest_event_timestamp
     for event in get_pointer_ahead_event_pool_copy:
         event_timestamp = int(get_pointer_ahead_event_pool_copy[event]['timestamp'])
         if event_timestamp == proposed_timestamp:
@@ -364,9 +341,7 @@ def get_pointer_ahead(proposed_timestamp):
 
     debug('get_pointer_ahead: candidates found: '+str(len(candidates)))
 
-    # print candidates
-
-    # Sort and choose the the smaller number among the candidates
+    # Sort and choose the smaller number among the candidates
     if candidates:
         candidate = sorted(candidates)[0]
         if candidate > proposed_timestamp:
@@ -382,7 +357,7 @@ def get_pointer_ahead(proposed_timestamp):
 
 def purge_event_pool(event_pool):
     global pointer
-    # pointer_comming_in = pointer
+    # pointer_coming_in = pointer
     debug("purge_event_pool: in: "+str(len(event_pool)))
     # debug("purge_event_pool: ten_seconds_ago "+from_epoch_milliseconds_to_string(ten_seconds_ago))
     debug("purge_event_pool: Starting with pointer "+str(pointer)+" "+from_epoch_milliseconds_to_string(pointer))
@@ -393,17 +368,21 @@ def purge_event_pool(event_pool):
         #
         # if event_timestamp >= (pointer - interval) and event_timestamp < pointer:
         if event_timestamp >= pointer and event_timestamp < (pointer + interval):
-            # Print and...
+            #
+            # I don't understand how this part works :'(
             event_to_print = event_pool[event]
-            # adding event ID
+            # Add event ID
             event_to_print['id'] = event
+            #
+            #
+            # Print...
             to_print.append(event_pool[event])
             # delete...
             event_pool.pop(event)
         # elif event_timestamp < (pointer - interval):
         elif event_timestamp < pointer:
             # ...discard what is below last output.
-            debug("purge_event_pool: Discarded event @timestamp " + from_epoch_milliseconds_to_string(event_timestamp) +" "+ str(event) )
+            debug("purge_event_pool: Discarded event @timestamp " + from_epoch_milliseconds_to_string(event_timestamp)+" "+str(event))
             #
             # print "WARNING purge_event_pool: Discarded event with @timestamp "+from_epoch_milliseconds_to_string(event_timestamp)+" "+str(event)
             #
@@ -415,17 +394,11 @@ def purge_event_pool(event_pool):
 
     # Print (add to print_pool) and let wait() function to print it out later
     for event in sorted(to_print,key=getKey):
-        # print_event_by_event(event)
         if show_headers:
             print_pool.append(from_epoch_milliseconds_to_string(event['timestamp']) + " " + event['id'] + " " + event['host'] + " " + event['type'] + " " + event['message'] + '\n')
-            # print_pool.append(str(from_epoch_milliseconds_to_string(event['timestamp']) + " " + event['host'] + " " + event['type'] + " " + event['message']) + '\n')
         else:
             print_pool.append(event['message'] + '\n')
-            # print_pool.append(str(event['message']) + '\n')
-            # print_pool.append(str(from_epoch_milliseconds_to_string(event['timestamp']) + " " + event['host'] + " " + event['type'] + " " +event['message'])[0:width] + '\n')
-            # print_pool.append(str(from_epoch_milliseconds_to_string(event['timestamp']) + " " + event['frontal'] + " " + event['type'] + " " +event['message'])[0:width] + '\n')
-
-        # ...make the this event the current pointer (they are sorted so the last one will be the higher)
+        # Make the this event the current pointer (they are sorted so the last one will be the newest)
         pointer = int(event['timestamp'])
 
     # Check whether there is a gap between the new pointer mark and the available events in the pool
@@ -434,12 +407,12 @@ def purge_event_pool(event_pool):
     proposed_pointer = get_pointer_ahead(pointer)
     debug('purge_event_pool: get_pointer_ahead(pointer): '+str(proposed_pointer))
     if proposed_pointer == 0:
-        # No better option
-        debug('purge_event_pool: proposed_pointer: No better option')
-        pass
+        # No better option. Just move ahead 1 ms.
+        debug('purge_event_pool: proposed_pointer: No better option. Pointer += 1')
+        pointer += 1
     else:
         # There is a better option ahead
-        debug('purge_event_pool: proposed_pointer: '+str(proposed_pointer)+' which is a jump of '+str(proposed_pointer - pointer)+'ms')
+        debug('purge_event_pool: proposed_pointer: '+str(proposed_pointer)+' which is a jump of '+str(proposed_pointer - pointer)+' ms')
         pointer = proposed_pointer
 
     debug("purge_event_pool: out: "+str(len(event_pool)))
@@ -454,6 +427,13 @@ def single_run_purge_event_pool(event_pool):
     to_print = []
 
     for event in event_pool:
+        #
+        # I don't understand how this part works :'(
+        event_to_print = event_pool[event]
+        # Add event ID
+        event_to_print['id'] = event
+        #
+        #
         to_print.append(event_pool[event])
 
     # Sort by timestamp
@@ -463,8 +443,7 @@ def single_run_purge_event_pool(event_pool):
     for event in sorted(to_print, key=getKey):
         if show_headers:
             print_pool.append(
-                from_epoch_milliseconds_to_string(event['timestamp']) + " " + event['host'] + " " + event[
-                    'type'] + " " + event['message'] + '\n')
+                from_epoch_milliseconds_to_string(event['timestamp'])+" "+event['id']+" "+event['host'] + " " + event['type'] + " " + event['message'] + '\n')
         else:
             print_pool.append(event['message'] + '\n')
 
@@ -472,66 +451,67 @@ def single_run_purge_event_pool(event_pool):
     # print_pool = []
     # event_pool = {}
 
-
-def query_test(from_date_time):
-    # global event_pool
-    # global print_pool
-    # to_print = []
-
-    query_search = { "query": {
-                            "filtered": {
-                                "query": {
-                                    "bool": {
-                                        "must": [ ]
-                                    }
-                                },
-                                "filter": {
-                                    "range": { }
-                                }
-                            }
-                        }
-                    }
-
-    query_search['query']['filtered']['filter']['range'] = {"@timestamp": {"gte": from_date_time}}
-    query_search['query']['filtered']['query']['bool']['must'].append({"match_phrase": {"host": host_to_search}})
-    # query_search['query']['filtered']['query']['bool']['must'].append({"match": {field1: value1}})
-
-    res = es.search(size=docs, index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
-                    sort="@timestamp:asc",
-                    body=query_search
-                    )
-
-    if len(res['hits']['hits']) != 0:
-        timestamp = res['hits']['hits'][0]['sort'][0]
-
-        to_object(res)
-
-        single_run_purge_event_pool(event_pool)
-        # #### Function needed here (and for purge() too)
-        #
-        # for event in event_pool:
-        #     to_print.append(event_pool[event])
-        #
-        # # Sort by timestamp
-        # def getKey(item):
-        #     return item['timestamp']
-        #
-        # for event in sorted(to_print, key=getKey):
-        #     if show_headers:
-        #         print_pool.append(
-        #             from_epoch_milliseconds_to_string(event['timestamp']) + " " + event['host'] + " " + event[
-        #                 'type'] + " " + event['message'] + '\n')
-        #     else:
-        #         print_pool.append(event['message'] + '\n')
-        #
-        # what_to_do_while_we_wait()
-        # print_pool = []
-        # event_pool = {}
-    return
+#
+# def query_test(from_date_time):
+#     # global event_pool
+#     # global print_pool
+#     # to_print = []
+#
+#     query_search = { "query": {
+#                             "filtered": {
+#                                 "query": {
+#                                     "bool": {
+#                                         "must": [ ]
+#                                     }
+#                                 },
+#                                 "filter": {
+#                                     "range": { }
+#                                 }
+#                             }
+#                         }
+#                     }
+#
+#     query_search['query']['filtered']['filter']['range'] = {"@timestamp": {"gte": from_date_time}}
+#     query_search['query']['filtered']['query']['bool']['must'].append({"match_phrase": {"host": host_to_search}})
+#     # query_search['query']['filtered']['query']['bool']['must'].append({"match": {field1: value1}})
+#
+#     res = es.search(size=docs, index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
+#                     sort="@timestamp:asc",
+#                     body=query_search
+#                     )
+#
+#     if len(res['hits']['hits']) != 0:
+#         timestamp = res['hits']['hits'][0]['sort'][0]
+#
+#         to_object(res)
+#
+#         single_run_purge_event_pool(event_pool)
+#         # #### Function needed here (and for purge() too)
+#         #
+#         # for event in event_pool:
+#         #     to_print.append(event_pool[event])
+#         #
+#         # # Sort by timestamp
+#         # def getKey(item):
+#         #     return item['timestamp']
+#         #
+#         # for event in sorted(to_print, key=getKey):
+#         #     if show_headers:
+#         #         print_pool.append(
+#         #             from_epoch_milliseconds_to_string(event['timestamp']) + " " + event['host'] + " " + event[
+#         #                 'type'] + " " + event['message'] + '\n')
+#         #     else:
+#         #         print_pool.append(event['message'] + '\n')
+#         #
+#         # what_to_do_while_we_wait()
+#         # print_pool = []
+#         # event_pool = {}
+#     return
+#
 
 
 # ES Search simulator for testing purposes (dummy load)
-def search_events_dummy_load(from_date_time):
+def search_events_dummy_load(search_events_dummy_load_from_date_time):
     """
     res = {
         u'hits':
@@ -549,46 +529,50 @@ def search_events_dummy_load(from_date_time):
     }
     """
 
-    from_date_time_milliseconds = from_string_to_epoch_milliseconds(from_date_time)
-    debug("search_events_dummy_load: from_date_time: " +str(from_date_time_milliseconds)+" "+from_date_time)
+    from_date_time_milliseconds = from_string_to_epoch_milliseconds(search_events_dummy_load_from_date_time)
+    debug("search_events_dummy_load: from_date_time: "+str(from_date_time_milliseconds)+" "+search_events_dummy_load_from_date_time)
 
     hits = []
-    # _type
-    score = None # _score
+    score = None
     host = 'server-1.example.com'
     path = '/var/log/httpd/access_log'
-    # message = '192.168.1.1, 192.168.1.2, 192.168.1.3 - - '+ datetime.datetime.now().strftime('[%d/%b/%Y:%H:%M:%S.%f +0000]') +' "GET /dummy.html HTTP/1.1" 200 51 0/823 "Agent" "Referer"'
-    message_begining = '192.168.1.1, 192.168.1.2, 192.168.1.3 - - '
+    message_begin = '192.168.1.1, 192.168.1.2, 192.168.1.3 - - '
     message_end = ' "GET /dummy.html HTTP/1.1" 200 51 0/823 "Agent" "Referer"'
-    # @timestamp
-    # _id
-    # sort
     max_score = None
     shards = {'successful': 5, 'failed': 0, 'total': 5}
-    # took = 1000
     time_out = False
-    # total = 1000
-
-    timestamp = from_date_time_milliseconds
-    ## fields = {'path': [path], 'host': [host], 'message': [message], '@timestamp': [from_epoch_milliseconds_to_string(timestamp)] }
-    ## hit = { 'sort': [timestamp], '_type': doc_type, '_index': index, '_score': score, 'fields': fields, '_id': doc_id }
 
     hash_sum = 0
-    # Loop from provided from_date_time to current time
-    for dummy_timestamp in range (from_date_time_milliseconds , int(datetime.datetime.utcnow().strftime('%s%f')[:-3])):
+    # Loop from provided from_date_time to current time - 2 seconds
+    # (to simulate ES indexing time (the newest event will be always 2 seconds in the past)
+    for dummy_timestamp in range(from_date_time_milliseconds, (int(datetime.datetime.utcnow().strftime('%s%f')[:-3])) - 2000 ):
 
+        # Hash the timestamp from the loop to have a predictive pseudo random sequence:
+        # Given the same dummy_factor and the sime epoch time the sequence of timestamp will always be the same
         dummy_timestamp_hash = hashlib.md5(str(dummy_timestamp)).hexdigest()
 
+        # Iterate the hash and use only the integers to add them all together (ignoring letters)
         for hash_pos in range(0, len(dummy_timestamp_hash) + 1):
             if dummy_timestamp_hash[hash_pos - 1:hash_pos].isdigit():
                 hash_sum += int(dummy_timestamp_hash[hash_pos - 1:hash_pos])
 
+        # Dummy_factor = threshold above which we use the timestamps and discard the rest
         if hash_sum > dummy_factor:
             debug("search_events_dummy_load: dummy_timestamp: "+str(dummy_timestamp)+" hash_sum: "+str(hash_sum))
 
             doc_id = 'ES_DUMMY_ID_' + str(dummy_timestamp)[-8:]
-            fields = {'path': [path], 'host': [host], 'message': [message_begining + from_epoch_milliseconds_to_string(dummy_timestamp) + message_end], '@timestamp': [from_epoch_milliseconds_to_string(dummy_timestamp)] }
-            hit = { 'sort': [dummy_timestamp], '_type': doc_type, '_index': index, '_score': score, 'fields': fields, '_id': doc_id }
+            fields = {'path': [path],
+                      'host': [host],
+                      'message': [message_begin + from_epoch_milliseconds_to_string(dummy_timestamp) + message_end],
+                      '@timestamp': [from_epoch_milliseconds_to_string(dummy_timestamp)]
+                      }
+            hit = { 'sort': [dummy_timestamp],
+                    '_type': doc_type,
+                    '_index': index,
+                    '_score': score,
+                    'fields': fields,
+                    '_id': doc_id
+                    }
             hits.append(hit)
 
         hash_sum = 0
@@ -601,7 +585,7 @@ def search_events_dummy_load(from_date_time):
 
     res = {'hits': hits}
     res['_shards'] = shards
-    res['took'] = len(hits) * 10 # Number of events * 10 dummy milliseconds
+    res['took'] = len(hits) * 10 # Number of events * 10 "dummy" milliseconds
     res['time_out'] = time_out
 
     # # Let's simulate that ES takes some time to fulfill the request
@@ -699,7 +683,7 @@ if args.debug:
 else:
     DEBUG = None
 
-debug("main: now " + from_epoch_milliseconds_to_string(datetime.datetime.utcnow().strftime('%s%f')[:-3]))
+debug("main: Now: "+str(datetime.datetime.utcnow().strftime('%s%f')[:-3])+" "+from_epoch_milliseconds_to_string(datetime.datetime.utcnow().strftime('%s%f')[:-3]))
 debug("main: version 0.9.6")
 
 interval = 1000  # milliseconds - Size of the chunk of time used to move events from the event_pool to print_pool
@@ -712,7 +696,7 @@ print_pool = [] # from those, the list of event ready to print on the next outpu
 to_the_past = 10000  # milliseconds - How far we move the pointer to the past to give ES time to consolidate
                      #                Useful when tailing logs from several servers at the same time
 
-dummy_factor = 130 # Probability of finding dummy events when using dummy endpoint (the lower the higher)
+dummy_factor = 145 # Probability of finding dummy events when using dummy endpoint (the lower the higher the probability)
 
 # Mutable query object base for main search
 query_search = {
@@ -729,7 +713,7 @@ query_search = {
         }
     }
 }
-# and for non continuous search (datetime filter not necessary)
+# and for non continuous search (datetime filter not necessary, we will sort descendent in ES and request only the number of 'docs')
 query_latest = {
     "query": {
         "filtered": {
@@ -798,7 +782,6 @@ elif args.httpmethod:
 else:
     value1 = ''
 
-
 # Workaround to make it work in AWS AMI Linux
 # Python in AWS fails to locate the CA to validate the ES SSL endpoint and we need to specify it
 # https://access.redhat.com/articles/2039753
@@ -815,7 +798,7 @@ if not DUMMY:
 if not DUMMY:
     # --index
     if not args.index:
-        index = check_index() # Get the lastest available index from ES
+        index = check_index() # Get the latest available index from ES
     else:
         index = args.index
 else:
@@ -830,28 +813,31 @@ else:
 
 # When not under -f just get the latest and exit
 if non_stop == False:
-    debug('Entering single run...')
+    debug('Entering Single Run...')
     if not DUMMY:
         get_latest_events(index)
     else:
-        current_time = from_epoch_milliseconds_to_string( int(datetime.datetime.now().strftime('%s%f')[:-3]) )
-        from_date_time = current_time
-        res = search_events_dummy_load(from_date_time)
+        # current_time = from_epoch_milliseconds_to_string( int(datetime.datetime.now().strftime('%s%f')[:-3]) )
+        # from_date_time = current_time
+        # res = search_events_dummy_load(from_date_time)
+        # to_object(res)
+        # single_run_purge_event_pool(event_pool)
+
+        latest_event_timestamp = get_latest_event_timestamp_dummy_load()
+        res = search_events_dummy_load( from_epoch_milliseconds_to_string(latest_event_timestamp))
         to_object(res)
         single_run_purge_event_pool(event_pool)
 
-    debug('Single run finished. Exiting.')
+    debug('Single Run finished. Exiting.')
     sys.exit(0)
 
 # Get the latest event timestamp from the Index
-if DUMMY:
-    latest_event_timestamp = get_latest_event_timestamp_dummy_load(index)
-else:
+if not DUMMY:
     latest_event_timestamp = get_latest_event_timestamp(index)
+else:
+    latest_event_timestamp = get_latest_event_timestamp_dummy_load() # No index necessary for dummy_load
 
-# # Go 10 seconds to the past. There is where we place "in the past" pointer to give time to ES to consolidate its index.
-# ten_seconds_ago = latest_event_timestamp - to_the_past
-
+# Go 10 seconds to the past. There is where we place "in the past" pointer to give time to ES to consolidate its index.
 pointer = latest_event_timestamp - to_the_past
 
 # ###
@@ -897,8 +883,8 @@ while True:
     # Wait for Elasticsearch to index a bit more of stuff (and Print whatever is ready meanwhile)
     wait(interval)
 
-    # difference = get_newest_event_timestamp(event_pool) - pointer
-    # print "DDDD", pointer, difference
+    difference = get_newest_event_timestamp(event_pool) - pointer
+    print "DDDD", pointer, difference
 
 
 
