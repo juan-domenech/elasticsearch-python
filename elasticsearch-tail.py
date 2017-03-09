@@ -305,9 +305,84 @@ def to_object(res):
 #         return oldest
 
 
+# Get the newest event_timestamp in the event_pool
+def get_newest_event_timestamp(get_newest_event_event_pool_copy):
+    temp_timestamp = 0
+
+    #
+    if len(get_newest_event_event_pool_copy) == 0:
+        return 0
+
+    for event in get_newest_event_event_pool_copy:
+        if int(get_newest_event_event_pool_copy[event]['timestamp']) > temp_timestamp:
+            temp_timestamp = int(get_newest_event_event_pool_copy[event]['timestamp'])
+    # Error when there are events in the event_pool but we can't find any
+    if temp_timestamp  == 0:
+        print "ERROR get_newest_event_timestamp: temp_timestamp == 0"
+        exit(1)
+    else:
+        debug('get_newest_event_timestamp: temp_timestamp: '+str(temp_timestamp))
+        return temp_timestamp
+
+
+
+# Find what's the next available event in the pool given a timestamp without invading the safeguard (to_the_past)
+def get_pointer_ahead(proposed_timestamp):
+    debug('get_pointer_ahead: proposed_timestamp: '+str(proposed_timestamp))
+    candidates = []
+    previous_event_timestamp = 0
+    newest_event_timestamp = 0
+    get_pointer_ahead_event_pool_copy = event_pool.copy()
+
+    #
+    if len(get_pointer_ahead_event_pool_copy) == 0:
+        return 0
+
+    # # Get the newest event_timestamp in the event_pool
+    # for event in get_pointer_ahead_event_pool_copy:
+    #     if int(get_pointer_ahead_event_pool_copy[event]['timestamp']) > previous_event_timestamp:
+    #         previous_event_timestamp = int(get_pointer_ahead_event_pool_copy[event]['timestamp'])
+    # # Error when there are events in the event_pool but we can't find any
+    # if previous_event_timestamp == 0:
+    #     print "ERROR get_pointer_ahead: previous_event_timestamp == 0"
+    #     exit(1)
+    # else:
+    #     newest_event_timestamp = previous_event_timestamp
+    # debug('get_pointer_ahead: newest_event_timestamp: ' + str(newest_event_timestamp))
+
+    newest_event_timestamp = get_newest_event_timestamp(get_pointer_ahead_event_pool_copy)
+
+    # Loop event_pool searching for timestamps older than the proposed_timestamp
+    # and at the same time not in the range between the newest event in the pool and the 10s safeguard (to_the_past)
+    for event in get_pointer_ahead_event_pool_copy:
+        event_timestamp = int(get_pointer_ahead_event_pool_copy[event]['timestamp'])
+        if event_timestamp == proposed_timestamp:
+            print "ERROR get_pointer_ahead: proposed_timestamp found in the event_pool"
+            exit(1)
+        if event_timestamp > proposed_timestamp and event_timestamp < (newest_event_timestamp - to_the_past):
+            candidates.append(event_timestamp)
+
+    debug('get_pointer_ahead: candidates found: '+str(len(candidates)))
+
+    # print candidates
+
+    # Sort and choose the the smaller number among the candidates
+    if candidates:
+        candidate = sorted(candidates)[0]
+        if candidate > proposed_timestamp:
+            debug('get_pointer_ahead: return candidate'+str(candidate))
+            return candidate
+        else:
+            debug('get_pointer_ahead: return no candidate')
+            return 0
+    else:
+        debug('get_pointer_ahead: no candidates')
+        return 0
+
+
 def purge_event_pool(event_pool):
     global pointer
-    pointer_comming_in = pointer
+    # pointer_comming_in = pointer
     debug("purge_event_pool: in: "+str(len(event_pool)))
     # debug("purge_event_pool: ten_seconds_ago "+from_epoch_milliseconds_to_string(ten_seconds_ago))
     debug("purge_event_pool: Starting with pointer "+str(pointer)+" "+from_epoch_milliseconds_to_string(pointer))
@@ -315,8 +390,9 @@ def purge_event_pool(event_pool):
     to_print = []
     for event in event_pool.copy():
         event_timestamp = int(event_pool[event]['timestamp'])
-        # if event_timestamp >= (ten_seconds_ago - interval) and event_timestamp < ten_seconds_ago:
-        if event_timestamp >= (pointer - interval) and event_timestamp < pointer:
+        #
+        # if event_timestamp >= (pointer - interval) and event_timestamp < pointer:
+        if event_timestamp >= pointer and event_timestamp < (pointer + interval):
             # Print and...
             event_to_print = event_pool[event]
             # adding event ID
@@ -324,11 +400,12 @@ def purge_event_pool(event_pool):
             to_print.append(event_pool[event])
             # delete...
             event_pool.pop(event)
-        elif event_timestamp < pointer_comming_in - interval:
+        # elif event_timestamp < (pointer - interval):
+        elif event_timestamp < pointer:
             # ...discard what is below last output.
             debug("purge_event_pool: Discarded event @timestamp " + from_epoch_milliseconds_to_string(event_timestamp) +" "+ str(event) )
             #
-            print "WARNING purge_event_pool: Discarded event with @timestamp "+from_epoch_milliseconds_to_string(event_timestamp)+" "+str(event)
+            # print "WARNING purge_event_pool: Discarded event with @timestamp "+from_epoch_milliseconds_to_string(event_timestamp)+" "+str(event)
             #
             event_pool.pop(event)
 
@@ -348,8 +425,22 @@ def purge_event_pool(event_pool):
             # print_pool.append(str(from_epoch_milliseconds_to_string(event['timestamp']) + " " + event['host'] + " " + event['type'] + " " +event['message'])[0:width] + '\n')
             # print_pool.append(str(from_epoch_milliseconds_to_string(event['timestamp']) + " " + event['frontal'] + " " + event['type'] + " " +event['message'])[0:width] + '\n')
 
-        # ...make the this event the current pointer
-        pointer = event['timestamp']
+        # ...make the this event the current pointer (they are sorted so the last one will be the higher)
+        pointer = int(event['timestamp'])
+
+    # Check whether there is a gap between the new pointer mark and the available events in the pool
+    # and in that case move ahead to match it.
+    # Usefull when we are falling behind due lack of new events near our current pointer
+    proposed_pointer = get_pointer_ahead(pointer)
+    debug('purge_event_pool: get_pointer_ahead(pointer): '+str(proposed_pointer))
+    if proposed_pointer == 0:
+        # No better option
+        debug('purge_event_pool: proposed_pointer: No better option')
+        pass
+    else:
+        # There is a better option ahead
+        debug('purge_event_pool: proposed_pointer: '+str(proposed_pointer)+' which is a jump of '+str(proposed_pointer - pointer)+'ms')
+        pointer = proposed_pointer
 
     debug("purge_event_pool: out: "+str(len(event_pool)))
     debug("purge_event_pool: len(print_pool) "+str(len(print_pool)))
@@ -513,8 +604,8 @@ def search_events_dummy_load(from_date_time):
     res['took'] = len(hits) * 10 # Number of events * 10 dummy milliseconds
     res['time_out'] = time_out
 
-    # Let's simulate that ES takes some time to fulfill the request
-    time2.sleep(1.5)
+    # # Let's simulate that ES takes some time to fulfill the request
+    # time2.sleep(1.5)
 
     return res
 
@@ -621,7 +712,7 @@ print_pool = [] # from those, the list of event ready to print on the next outpu
 to_the_past = 10000  # milliseconds - How far we move the pointer to the past to give ES time to consolidate
                      #                Useful when tailing logs from several servers at the same time
 
-dummy_factor = 140 # Probability of finding dummy events when using dummy endpoint (the lower the higher)
+dummy_factor = 130 # Probability of finding dummy events when using dummy endpoint (the lower the higher)
 
 # Mutable query object base for main search
 query_search = {
@@ -805,10 +896,12 @@ while True:
 
     # Wait for Elasticsearch to index a bit more of stuff (and Print whatever is ready meanwhile)
     wait(interval)
-    # wait( 1000 )
 
-    difference = get_latest_event_timestamp_dummy_load(index) - pointer
-    print "DDDD", difference
+    # difference = get_newest_event_timestamp(event_pool) - pointer
+    # print "DDDD", pointer, difference
+
+
+
 
     # difference = ((int(datetime.datetime.utcnow().strftime('%s%f')[:-3]) - ten_seconds_ago) - to_the_past)
     # if difference > 1000:
