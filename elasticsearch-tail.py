@@ -8,6 +8,7 @@ import platform
 import re
 import signal # Dealing with Ctrl+C
 import codecs, locale # Dealing with Unicode
+import hashlib
 
 try:
     from elasticsearch import Elasticsearch
@@ -96,15 +97,71 @@ def from_string_to_epoch_milliseconds(string):
     return milliseconds
 
 
+# Get lastest available index
+def check_index():
+
+    # Get indices list
+    indices = []
+    list = es.indices.get_aliases()
+    for index in list:
+        # We only care for 'logstash-*'
+        if index[0:9] == 'logstash-':
+            indices.append(str(index))
+    debug('check_index: found '+str(len(indices))+' indices')
+    if indices == []:
+        debug('ERROR check_index: No index found! Exiting.')
+        sys.exit(1)
+    indices = sorted(indices, reverse=True)
+    # debug('check_index: checking '+index)
+    # days = 1
+    # while True:
+    #     try:
+    #         es.search(size=1, index=index, doc_type=doc_type,
+    #                         body={
+    #                             "query":
+    #                                 {"match_all": {}}
+    #                         }
+    #                         )
+    #         debug('check_index: index '+index+' is valid')
+    #         return index
+    #     except:
+    #         debug('check_index: index '+index+' not found')
+    #         yesterday = datetime.date.today() - datetime.timedelta(days)
+    #         index = yesterday.strftime("logstash-%Y.%m.%d")
+    #         debug('check_index: let\'s try '+str(days)+' days in the past = '+index)
+    #         days += 1
+    #         if days > 31:
+    #             print "ERROR: No index found after trying 30 days in the past"
+    #             sys.exit(1)
+    debug('check_index: returning "'+indices[0]+'"')
+    return indices[0]
+
+
 def get_latest_event_timestamp_dummy_load(index):
-    # Return current time as fake lastest event in ES
-    timestamp = int(datetime.datetime.utcnow().strftime('%s%f')[:-3]) - 20000
+    fake_timestamp = 0
+    #
+    now_fake_timestamp = int(datetime.datetime.utcnow().strftime('%s%f')[:-3]) - 20000
 
-    # # Discard milliseconds and round down to seconds
-    # timestamp = (timestamp/1000)*1000
+    hash_sum = 0
+    # Loop from now-20000 to a second ahead to find a valid dummy timestamp
+    for dummy_timestamp in range (now_fake_timestamp , now_fake_timestamp+2000):
 
-    debug("get_latest_event_timestamp_dummy_load: " + from_epoch_milliseconds_to_string(timestamp))
-    return timestamp
+        dummy_timestamp_hash = hashlib.md5(str(dummy_timestamp)).hexdigest()
+
+        for hash_pos in range(0, len(dummy_timestamp_hash) + 1):
+            if dummy_timestamp_hash[hash_pos - 1:hash_pos].isdigit():
+                hash_sum += int(dummy_timestamp_hash[hash_pos - 1:hash_pos])
+        # print hash_sum
+        if hash_sum > dummy_factor:
+            fake_timestamp = dummy_timestamp
+        hash_sum = 0
+
+    if fake_timestamp == 0:
+        print "ERROR get_latest_event_timestamp_dummy_load: failed to find a valid timestamps "+str(now_fake_timestamp)+" "+from_epoch_milliseconds_to_string(now_fake_timestamp)
+        exit(1)
+
+    debug("get_latest_event_timestamp_dummy_load: "+str(fake_timestamp)+" "+from_epoch_milliseconds_to_string(fake_timestamp))
+    return fake_timestamp
 
 
 def get_latest_event_timestamp(index):
@@ -258,9 +315,6 @@ def purge_event_pool(event_pool):
     to_print = []
     for event in event_pool.copy():
         event_timestamp = int(event_pool[event]['timestamp'])
-        # if event_timestamp >= current time pointer and < (current time pointer + the gap covered by interval):
-        # if event_timestamp >= ten_seconds_ago and (event_timestamp < ten_seconds_ago + interval):
-        # if event_timestamp <= oldest_in_the_pool + interval:
         # if event_timestamp >= (ten_seconds_ago - interval) and event_timestamp < ten_seconds_ago:
         if event_timestamp >= (pointer - interval) and event_timestamp < pointer:
             # Print and...
@@ -277,7 +331,6 @@ def purge_event_pool(event_pool):
             print "WARNING purge_event_pool: Discarded event with @timestamp "+from_epoch_milliseconds_to_string(event_timestamp)+" "+str(event)
             #
             event_pool.pop(event)
-
 
     # Sort by timestamp
     def getKey(item):
@@ -386,7 +439,7 @@ def query_test(from_date_time):
     return
 
 
-# ES Search simulator for testing purposes
+# ES Search simulator for testing purposes (dummy load)
 def search_events_dummy_load(from_date_time):
     """
     res = {
@@ -404,11 +457,11 @@ def search_events_dummy_load(from_date_time):
         u'timed_out': False
     }
     """
-    debug("search_events_dummy_load: from_date_time: "+from_date_time)
 
     from_date_time_milliseconds = from_string_to_epoch_milliseconds(from_date_time)
+    debug("search_events_dummy_load: from_date_time: " +str(from_date_time_milliseconds)+" "+from_date_time)
+
     hits = []
-    # index = datetime.datetime.utcnow().strftime("logstash-%Y.%m.%d") # _index
     # _type
     score = None # _score
     host = 'server-1.example.com'
@@ -421,35 +474,43 @@ def search_events_dummy_load(from_date_time):
     # sort
     max_score = None
     shards = {'successful': 5, 'failed': 0, 'total': 5}
-    took = 1000
+    # took = 1000
     time_out = False
-    total = 1000
-
-    # total = randint(0,1000)
-    debug('search_events_dummy_load: total: '+str(total))
+    # total = 1000
 
     timestamp = from_date_time_milliseconds
     ## fields = {'path': [path], 'host': [host], 'message': [message], '@timestamp': [from_epoch_milliseconds_to_string(timestamp)] }
     ## hit = { 'sort': [timestamp], '_type': doc_type, '_index': index, '_score': score, 'fields': fields, '_id': doc_id }
 
-    for i in range(0,total):
+    hash_sum = 0
+    # Loop from provided from_date_time to current time
+    for dummy_timestamp in range (from_date_time_milliseconds , int(datetime.datetime.utcnow().strftime('%s%f')[:-3])):
 
-        doc_id = 'ES_DUMMY_ID_'+str(timestamp)[-8:]
-        # print timestamp,doc_id
-        fields = {'path': [path], 'host': [host], 'message': [message_begining + from_epoch_milliseconds_to_string(timestamp) + message_end], '@timestamp': [from_epoch_milliseconds_to_string(timestamp)] }
-        hit = { 'sort': [timestamp], '_type': doc_type, '_index': index, '_score': score, 'fields': fields, '_id': doc_id }
-        hits.append(hit)
+        dummy_timestamp_hash = hashlib.md5(str(dummy_timestamp)).hexdigest()
 
-        timestamp += 10
-        # timestamp += 2
+        for hash_pos in range(0, len(dummy_timestamp_hash) + 1):
+            if dummy_timestamp_hash[hash_pos - 1:hash_pos].isdigit():
+                hash_sum += int(dummy_timestamp_hash[hash_pos - 1:hash_pos])
+
+        if hash_sum > dummy_factor:
+            debug("search_events_dummy_load: dummy_timestamp: "+str(dummy_timestamp)+" hash_sum: "+str(hash_sum))
+
+            doc_id = 'ES_DUMMY_ID_' + str(dummy_timestamp)[-8:]
+            fields = {'path': [path], 'host': [host], 'message': [message_begining + from_epoch_milliseconds_to_string(dummy_timestamp) + message_end], '@timestamp': [from_epoch_milliseconds_to_string(dummy_timestamp)] }
+            hit = { 'sort': [dummy_timestamp], '_type': doc_type, '_index': index, '_score': score, 'fields': fields, '_id': doc_id }
+            hits.append(hit)
+
+        hash_sum = 0
+
+    debug('search_events_dummy_load: total hits: ' + str(len(hits)))
 
     hits = {'hits':hits}
-    hits['total'] = total
+    hits['total'] = len(hits)
     hits['max_score'] = max_score
 
     res = {'hits': hits}
     res['_shards'] = shards
-    res['took'] = took
+    res['took'] = len(hits) * 10 # Number of events * 10 dummy milliseconds
     res['time_out'] = time_out
 
     # Let's simulate that ES takes some time to fulfill the request
@@ -509,62 +570,6 @@ def what_to_do_while_we_wait():
     print_pool = []
 
 
-# def es_search(from_date_time):
-#     # l.acquire()
-#     # if current_process().name == 'Process-1':
-#     # print "I'am", current_process().name
-#     res = search_events(from_date_time)
-#
-#     debug("from_date_time "+from_date_time)
-#     debug("hits: "+str(len(res['hits']['hits'])))
-#
-#     if len(res['hits']['hits']) == 0:
-#         debug("Empty response!")
-#     else:
-#         # Add all the events in the response into the event_pool
-#         to_object(res)
-
-
-# Get lastest available index
-def check_index():
-
-    # Get indices list
-    indices = []
-    list = es.indices.get_aliases()
-    for index in list:
-        # We only care for 'logstash-*'
-        if index[0:9] == 'logstash-':
-            indices.append(str(index))
-    debug('check_index: found '+str(len(indices))+' indices')
-    if indices == []:
-        debug('ERROR check_index: No index found! Exiting.')
-        sys.exit(1)
-    indices = sorted(indices, reverse=True)
-    # debug('check_index: checking '+index)
-    # days = 1
-    # while True:
-    #     try:
-    #         es.search(size=1, index=index, doc_type=doc_type,
-    #                         body={
-    #                             "query":
-    #                                 {"match_all": {}}
-    #                         }
-    #                         )
-    #         debug('check_index: index '+index+' is valid')
-    #         return index
-    #     except:
-    #         debug('check_index: index '+index+' not found')
-    #         yesterday = datetime.date.today() - datetime.timedelta(days)
-    #         index = yesterday.strftime("logstash-%Y.%m.%d")
-    #         debug('check_index: let\'s try '+str(days)+' days in the past = '+index)
-    #         days += 1
-    #         if days > 31:
-    #             print "ERROR: No index found after trying 30 days in the past"
-    #             sys.exit(1)
-    debug('check_index: returning "'+indices[0]+'"')
-    return indices[0]
-
-
 def thread_execution(from_date_time):
     debug("thread_execution: from_date_time: "+str(from_string_to_epoch_milliseconds(from_date_time))+" "+str(from_date_time))
 
@@ -604,7 +609,7 @@ else:
     DEBUG = None
 
 debug("main: now " + from_epoch_milliseconds_to_string(datetime.datetime.utcnow().strftime('%s%f')[:-3]))
-debug("main: version 0.9.5")
+debug("main: version 0.9.6")
 
 interval = 1000  # milliseconds - Size of the chunk of time used to move events from the event_pool to print_pool
 
@@ -615,6 +620,8 @@ print_pool = [] # from those, the list of event ready to print on the next outpu
 
 to_the_past = 10000  # milliseconds - How far we move the pointer to the past to give ES time to consolidate
                      #                Useful when tailing logs from several servers at the same time
+
+dummy_factor = 140 # Probability of finding dummy events when using dummy endpoint (the lower the higher)
 
 # Mutable query object base for main search
 query_search = {
@@ -649,7 +656,7 @@ query_latest = {
 # --endpoint
 if args.endpoint == 'dummy' or args.endpoint == 'DUMMY':
     DUMMY = True
-    print "INFO: Activating Dummy Load"
+    print "INFO: Using Dummy Load"
 else:
     DUMMY = False
     endpoint = normalize_endpoint(args.endpoint)
@@ -800,12 +807,14 @@ while True:
     wait(interval)
     # wait( 1000 )
 
+    difference = get_latest_event_timestamp_dummy_load(index) - pointer
+    print "DDDD", difference
+
     # difference = ((int(datetime.datetime.utcnow().strftime('%s%f')[:-3]) - ten_seconds_ago) - to_the_past)
     # if difference > 1000:
     #     wait (500)
     # else:
-    #     wait (1000)
-
+    #     wait (100
     # if DUMMY:
     #     latest_event_timestamp = get_latest_event_timestamp_dummy_load(index)
     # else:
@@ -816,11 +825,10 @@ while True:
     # ten_seconds_ago += interval
 
 
-
-
     # print "DDDDD",difference
     # if difference > (to_the_past + ( interval * 5 ) ):
     #     ten_seconds_ago += ( interval * 2 )
-    #     print "DDDDD ajusting!"
+    #     print "DDDDD ajusting!"0)
+
 
     # And here we go again...
