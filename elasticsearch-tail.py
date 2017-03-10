@@ -3,12 +3,11 @@ import sys
 import time as time2
 from argparse import ArgumentParser
 import threading
-# from random import randint
 import platform
 import re
 import signal # Dealing with Ctrl+C
 import codecs, locale # Dealing with Unicode
-import hashlib
+import hashlib # To use MD5
 
 try:
     from elasticsearch import Elasticsearch
@@ -84,10 +83,6 @@ def normalize_endpoint(endpoint):
 
 def from_epoch_milliseconds_to_string(epoch_milli):
     return str(datetime.datetime.utcfromtimestamp( float(str( epoch_milli )[:-3]+'.'+str( epoch_milli )[-3:]) ).strftime('%Y-%m-%dT%H:%M:%S.%f'))[:-3]+"Z"
-
-
-# def from_epoch_seconds_to_string(epoch_secs):
-#     return from_epoch_milliseconds_to_string(epoch_secs * 1000)
 
 
 def from_string_to_epoch_milliseconds(string):
@@ -469,6 +464,7 @@ def single_run_purge_event_pool(event_pool):
         #
         #
         to_print.append(event_pool[event])
+        # event_pool.pop(event)
 
     # Sort by timestamp
     def getKey(item):
@@ -577,7 +573,7 @@ def search_events_dummy_load(search_events_dummy_load_from_date_time):
 def search_events(from_date_time):
     if DEBUG:
         current_time = int(datetime.datetime.utcnow().strftime('%s%f')[:-3])
-        debug("search_events: from_date_time: "+from_date_time+" "+str(from_string_to_epoch_milliseconds(from_date_time)))
+        debug("search_events: from_date_time: "+str(from_string_to_epoch_milliseconds(from_date_time))+" "+from_date_time)
     # https://www.elastic.co/guide/en/elasticsearch/reference/current/query-dsl-range-query.html
     # http://elasticsearch-py.readthedocs.io/en/master/api.html#elasticsearch.Elasticsearch.search
     debug("search_events: host: "+host_to_search)
@@ -609,9 +605,12 @@ def wait(milliseconds):
 
 
 def single_run_what_to_do_while_we_wait():
+    global print_pool
     for i in range(0,len( print_pool ) ):
         sys.stdout.write( print_pool[i] )
         sys.stdout.flush()
+
+    print_pool = []
 
 
 def what_to_do_while_we_wait():
@@ -632,7 +631,7 @@ def what_to_do_while_we_wait():
 
 
 def thread_execution(from_date_time):
-    debug("thread_execution: from_date_time: "+str(from_string_to_epoch_milliseconds(from_date_time))+" "+str(from_date_time))
+    debug("thread_execution: from_date_time: "+str(from_string_to_epoch_milliseconds(from_date_time))+" "+from_date_time)
 
     if DUMMY:
         res = search_events_dummy_load(from_date_time)
@@ -682,7 +681,7 @@ print_pool = [] # from those, the list of event ready to print on the next outpu
 to_the_past = 10000  # milliseconds - How far we move the pointer to the past to give ES time to consolidate
                      #                Useful when tailing logs from several servers at the same time
 
-dummy_factor = 145 # Probability of finding dummy events when using dummy endpoint (the lower the higher the probability)
+dummy_factor = 135 # Probability of finding dummy events when using dummy endpoint (the lower the higher the probability)
 
 # Mutable query object base for main search
 query_search = {
@@ -817,23 +816,40 @@ if non_stop == False:
 # Get the latest event timestamp from the Index
 if not DUMMY:
     latest_event_timestamp = get_latest_event_timestamp(index)
+    # Go 10 seconds to the past. There is where we place "in the past" pointer to give time to ES to consolidate its index.
+    pointer = latest_event_timestamp - to_the_past
 else:
-    latest_event_timestamp = get_latest_event_timestamp_dummy_load() # No index necessary for dummy_load
+    # latest_event_timestamp = get_latest_event_timestamp_dummy_load()  # 'index' not necessary for dummy_load
+    # pointer = latest_event_timestamp - to_the_past
 
-# Go 10 seconds to the past. There is where we place "in the past" pointer to give time to ES to consolidate its index.
-pointer = latest_event_timestamp - to_the_past
+    # When running under -f --nonstop we use the Single Run functions to get the initial number of 'docs' in one go
+    # and continue later as normal (like the Unix tail does)
+    latest_event_timestamp = get_latest_event_timestamp_dummy_load()
+    latest_event_timestamp -= to_the_past
+    res = get_latest_events_dummy_load(latest_event_timestamp)
+    to_object(res)
+    single_run_purge_event_pool(event_pool)
+    single_run_what_to_do_while_we_wait()
+    pointer = latest_event_timestamp + 1
+
+    print "XXX"
+
+# # Go 10 seconds to the past. There is where we place "in the past" pointer to give time to ES to consolidate its index.
+# pointer = latest_event_timestamp - to_the_past
 
 # thread = Threading(1,"Thread-1", ten_seconds_ago)
-thread = Threading(1,"Thread-1", pointer)
+thread = Threading(1,"Thread-1", from_epoch_milliseconds_to_string(pointer))
+thread.start()
 
 while True:
 
     # From timestamp in milliseconds to Elasticsearch format (seconds.milliseconds). i.e: 2016-07-14T13:37:45.123Z
     # from_date_time = from_epoch_milliseconds_to_string(ten_seconds_ago)
-    from_date_time = from_epoch_milliseconds_to_string(pointer)
+    # from_date_time = from_epoch_milliseconds_to_string(pointer)
 
     if not thread.isAlive():
-        thread = Threading(1,"Thread-1", from_date_time)
+        thread = Threading(1,"Thread-1", from_epoch_milliseconds_to_string(pointer))
+        # thread = Threading(1,"Thread-1", from_date_time)
         # thread = Threading(1,"Thread-1", (int(datetime.datetime.utcnow().strftime('%s%f')[:-3])) - to_the_past )
         thread.start()
 
