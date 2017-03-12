@@ -18,19 +18,20 @@ except:
 # To-Do:
 # ! Intial load + printing
 # Detect certificate failure and show error (and ignore?)
-# ! Keep time-in-the-past frozen when there are no new results are recover once they appear to avoid potential gaps
-# Check the last-event-pointer going ahead overtime beyond the 10s boundary and move pointer accordingly
 # Midnight scenario
 # Detect ES timeouts and missing shards (in searching and in get_last_event)
 # Improve dummy-load: Timestamp in standard format, Apache number of docs variable when not -f, random number of bytes, --type java,
-# Solve the 10000 limit on the answer from ES
+# Solve the 10000 limit on the answer from ES (or make it irrelevant)
+# Support downstream broke pipe (python es-tail.py | head)
+# Handle Ctrl+C into Thread (it seems to work only into the While: True)
+
 
 # In case of error:
 # "elasticsearch.exceptions.ConnectionError: ConnectionError(('Connection failed.', CannotSendRequest())) caused by: ConnectionError(('Connection failed.', CannotSendRequest()))"
 # Update pip install --upgrade urllib3
 # or use a non HTTPS Endpoint URL
 
-# Arguments parsing
+# Arguments parser
 parser = ArgumentParser(description='Unix like tail command for Elastisearch and Logstash.')
 parser.add_argument('-e', '--endpoint', help='ES endpoint URL.', required=True)
 parser.add_argument('-t', '--type', help='Doc_Type: apache, java, tomcat,... ', default='apache')
@@ -144,7 +145,7 @@ def get_latest_event_timestamp_dummy_load():
     return dummy_timestamp
 
 
-def get_latest_event_timestamp(index):
+def get_latest_event_timestamp():
     if DEBUG:
         current_time = int(datetime.datetime.utcnow().strftime('%s%f')[:-3])
     # if host_to_search:
@@ -154,16 +155,20 @@ def get_latest_event_timestamp(index):
     #                             {"match_phrase": {"host": host_to_search}}
     #                     }
     #                     )
-    if host_to_search or value1:
-        res = es.search(size=1, index=index, doc_type=doc_type, fields="@timestamp", sort="@timestamp:desc",
-                        body=query_latest)
-    else:
-        res = es.search(size=1, index=index, doc_type=doc_type, fields="@timestamp", sort="@timestamp:desc",
-                        body={
-                            "query":
-                                {"match_all": {}}
-                        }
-                        )
+
+    # if host_to_search or value1:
+    #     res = es.search(size=1, index=index, doc_type=doc_type, fields="@timestamp", sort="@timestamp:desc",
+    #                     body=query_latest)
+    # else:
+    #     res = es.search(size=1, index=index, doc_type=doc_type, fields="@timestamp", sort="@timestamp:desc",
+    #                     body={
+    #                         "query":
+    #                             {"match_all": {}}
+    #                     }
+    #                     )
+
+    res = es.search(size=1, index=index, doc_type=doc_type, fields="@timestamp", sort="@timestamp:desc",
+                    body=query_latest)
 
     debug("get_latest_event_timestamp: "+str(res))
 
@@ -184,9 +189,9 @@ def get_latest_event_timestamp(index):
 
 
 # When we are NOT under -f or --nonstop (dummy_load)
-def get_latest_events_dummy_load(latest_event_timestamp):
-    # from_date_time_milliseconds = from_string_to_epoch_milliseconds(search_events_dummy_load_from_date_time)
-    debug("get_latest_events_dummy_load: latest_event_timestamp: "+str(latest_event_timestamp)+" "+from_epoch_milliseconds_to_string(latest_event_timestamp))
+def get_latest_events_dummy_load(from_date_time):
+    from_date_time_milliseconds = from_string_to_epoch_milliseconds(from_date_time)
+    debug("get_latest_events_dummy_load: from_date_time: "+str(from_date_time_milliseconds)+" "+from_date_time)
 
     hits = []
     score = None
@@ -205,7 +210,7 @@ def get_latest_events_dummy_load(latest_event_timestamp):
 
     #
     # for dummy_timestamp in range((int(datetime.datetime.utcnow().strftime('%s%f')[:-3])) - 2000, 1 ):
-    for dummy_timestamp in xrange(latest_event_timestamp, 0, -1):
+    for dummy_timestamp in xrange(from_date_time_milliseconds, 0, -1):
         hash_sum = 0
 
         # Hash the timestamp from the loop to have a predictive pseudo random sequence:
@@ -257,26 +262,36 @@ def get_latest_events_dummy_load(latest_event_timestamp):
 
 
 # When we are NOT under -f or --nonstop
-def get_latest_events(index):
+# def get_latest_events(index):
+def get_latest_events(from_date_time):
+    debug("get_latest_events: latest_event_timestamp: "+str(from_string_to_epoch_milliseconds(from_date_time))+" "+from_date_time)
+
     # global event_pool
     # global print_pool
     # to_print = []
 
     if DEBUG:
         current_time = int(datetime.datetime.utcnow().strftime('%s%f')[:-3])
-
-    if host_to_search or value1:
-        res = es.search(size=docs, index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
-                        sort="@timestamp:desc",
-                        body=query_latest)
-    else:
-        res = es.search(size=docs, index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
-                        sort="@timestamp:desc",
-                        body={
-                            "query":
-                                {"match_all": {}}
-                            }
-                        )
+                                                                            ###
+    query_search['query']['filtered']['filter']['range'] = {"@timestamp": {"lte": from_date_time}}
+                                                                            ###
+    res = es.search(size=docs, index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
+                    sort="@timestamp:desc",
+                    body=query_search)
+    #
+    # if host_to_search or value1:
+    #     res = es.search(size=docs, index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
+    #                     sort="@timestamp:desc",
+    #                     body=query_latest)
+    # else:
+    #     res = es.search(size=docs, index=index, doc_type=doc_type, fields="@timestamp,message,path,host",
+    #                     sort="@timestamp:desc",
+    #                     body={
+    #                         "query":
+    #                             {"match_all": {}}
+    #                         }
+    #                     )
+    #
 
     debug("get_latest_events: "+str(res))
 
@@ -284,19 +299,32 @@ def get_latest_events(index):
     # On To-Do: to go a logstash index back trying to find the last event (it might be midnight...)
     if len(res['hits']['hits']) != 0:
         timestamp = res['hits']['hits'][0]['sort'][0]
-
-        to_object(res)
-
-        single_run_purge_event_pool(event_pool)
-
-        debug("get_latest_event: timestamp: " + str(timestamp) + " " + from_epoch_milliseconds_to_string(timestamp))
+        debug("get_latest_events: timestamp: " + str(timestamp) + " " + from_epoch_milliseconds_to_string(timestamp))
         if DEBUG:
             debug("get_latest_events: execution time: " + str(int(datetime.datetime.utcnow().strftime('%s%f')[:-3]) - current_time) + " ms")
-        return timestamp # Needed???
+        return res
     else:
         print "ERROR: get_latest_events: No results found with the current search criteria under index="+index
         print "INFO: Please use --index, --type or --hostname"
         sys.exit(1)
+
+    # # At least one event should return, otherwise we have an issue.
+    # # On To-Do: to go a logstash index back trying to find the last event (it might be midnight...)
+    # if len(res['hits']['hits']) != 0:
+    #     timestamp = res['hits']['hits'][0]['sort'][0]
+    #
+    #     to_object(res)
+    #
+    #     single_run_purge_event_pool(event_pool)
+    #
+    #     debug("get_latest_event: timestamp: " + str(timestamp) + " " + from_epoch_milliseconds_to_string(timestamp))
+    #     if DEBUG:
+    #         debug("get_latest_events: execution time: " + str(int(datetime.datetime.utcnow().strftime('%s%f')[:-3]) - current_time) + " ms")
+    #     return timestamp # Needed???
+    # else:
+    #     print "ERROR: get_latest_events: No results found with the current search criteria under index="+index
+    #     print "INFO: Please use --index, --type or --hostname"
+    #     sys.exit(1)
 
 
 # Inserts events into event_pool{}
@@ -453,6 +481,7 @@ def purge_event_pool(event_pool):
 def single_run_purge_event_pool(event_pool):
     # global event_pool
     global print_pool
+    global pointer
     to_print = []
 
     for event in event_pool:
@@ -476,30 +505,12 @@ def single_run_purge_event_pool(event_pool):
                 from_epoch_milliseconds_to_string(event['timestamp'])+" "+event['id']+" "+event['host'] + " " + event['type'] + " " + event['message'] + '\n')
         else:
             print_pool.append(event['message'] + '\n')
-
-    # what_to_do_while_we_wait()
-    # print_pool = []
-    # event_pool = {}
+        # Make the this event the current pointer (they are sorted so the last one will be the newest)
+        pointer = int(event['timestamp'])
 
 
 # ES Search simulator for testing purposes (dummy load)
 def search_events_dummy_load(search_events_dummy_load_from_date_time):
-    """
-    res = {
-        u'hits':
-               {u'hits': [
-                   {u'sort': [1469265844000], u'_type': u'apache', u'_index': u'logstash-2016.07.23', u'_score': None, u'fields': {u'path': [u'/var/log/httpd/access_log'], u'host': [u'server-1.example.com'], u'message': [u'192.168.1.1, 192.168.1.2, 192.168.1.3 - - [23/Jul/2016:09:23:44 +0000] "GET /hello-world.html HTTP/1.1" 200 51 0/823 "-" "-"'], u'@timestamp': [u'2016-07-23T09:23:44.000Z']}, u'_id': u'AVYXEVBHthisisid1111'},
-                   {u'sort': [1469265845000], u'_type': u'apache', u'_index': u'logstash-2016.07.23', u'_score': None, u'fields': {u'path': [u'/var/log/httpd/access_log'], u'host': [u'server-1.example.com'], u'message': [u'192.168.1.1, 192.168.1.2, 192.168.1.3 - - [23/Jul/2016:09:23:45 +0000] "GET /hello-world.html HTTP/1.1" 200 51 0/823 "-" "-"'], u'@timestamp': [u'2016-07-23T09:23:44.000Z']}, u'_id': u'AVYXEVBHthisisid1112'},
-                   {u'sort': [1469265846000], u'_type': u'apache', u'_index': u'logstash-2016.07.23', u'_score': None, u'fields': {u'path': [u'/var/log/httpd/access_log'], u'host': [u'server-1.example.com'], u'message': [u'192.168.1.1, 192.168.1.2, 192.168.1.3 - - [23/Jul/2016:09:23:46 +0000] "GET /hello-world.html HTTP/1.1" 200 51 0/823 "-" "-"'], u'@timestamp': [u'2016-07-23T09:23:44.000Z']}, u'_id': u'AVYXEVBHthisisid1113'}
-               ],
-                   u'total': 3,
-                   u'max_score': None
-               },
-        u'_shards': {u'successful': 5, u'failed': 0, u'total': 5},
-        u'took': 376,
-        u'timed_out': False
-    }
-    """
 
     from_date_time_milliseconds = from_string_to_epoch_milliseconds(search_events_dummy_load_from_date_time)
     debug("search_events_dummy_load: from_date_time: "+str(from_date_time_milliseconds)+" "+search_events_dummy_load_from_date_time)
@@ -585,6 +596,7 @@ def search_events(from_date_time):
 
     if DEBUG:
         debug("search_events: Execution time: "+str( int(datetime.datetime.utcnow().strftime('%s%f')[:-3]) - current_time)+"ms" )
+
     return res
 
 
@@ -669,7 +681,7 @@ else:
     DEBUG = None
 
 debug("main: Now: "+str(datetime.datetime.utcnow().strftime('%s%f')[:-3])+" "+from_epoch_milliseconds_to_string(datetime.datetime.utcnow().strftime('%s%f')[:-3]))
-debug("main: version 0.9.6")
+debug("main: version 0.9.7")
 
 interval = 1000  # milliseconds - Size of the chunk of time used to move events from the event_pool to print_pool
 
@@ -678,8 +690,8 @@ event_pool = {} # Memory space to store the events retrieved from ES
 
 print_pool = [] # from those, the list of event ready to print on the next output
 
-to_the_past = 10000  # milliseconds - How far we move the pointer to the past to give ES time to consolidate
-                     #                Useful when tailing logs from several servers at the same time
+to_the_past = 10000 # milliseconds - How far we move the pointer to the past to give ES time to consolidate
+                    # Useful when tailing logs from several servers at the same time
 
 dummy_factor = 135 # Probability of finding dummy events when using dummy endpoint (the lower the higher the probability)
 
@@ -790,12 +802,19 @@ else:
     # When using DUMMY endpoint index = today
     index = datetime.datetime.utcnow().strftime("logstash-%Y.%m.%d")
 
-# When not under -f just get the latest and exit
+# When not under -f or --nonstop just get the latest 'docs' and exit
 if non_stop == False:
     debug('Entering Single Run...')
     if not DUMMY:
-        get_latest_events(index)
-        single_run_what_to_do_while_we_wait()
+        # get_latest_events(index)
+        # single_run_what_to_do_while_we_wait()
+
+        latest_event_timestamp = get_latest_event_timestamp()
+        res = get_latest_events(from_epoch_milliseconds_to_string(latest_event_timestamp))
+        # to_object(res)
+        # single_run_purge_event_pool(event_pool)
+        # single_run_what_to_do_while_we_wait()
+
     else:
         # current_time = from_epoch_milliseconds_to_string( int(datetime.datetime.now().strftime('%s%f')[:-3]) )
         # from_date_time = current_time
@@ -805,34 +824,61 @@ if non_stop == False:
 
         latest_event_timestamp = get_latest_event_timestamp_dummy_load()
         # res = search_events_dummy_load( from_epoch_milliseconds_to_string(latest_event_timestamp))
-        res = get_latest_events_dummy_load(latest_event_timestamp)
-        to_object(res)
-        single_run_purge_event_pool(event_pool)
-        single_run_what_to_do_while_we_wait()
+        res = get_latest_events_dummy_load(from_epoch_milliseconds_to_string(latest_event_timestamp))
+        # to_object(res)
+        # single_run_purge_event_pool(event_pool)
+        # # Print number of 'docs' we have at print_pool in one go without effects
+        # single_run_what_to_do_while_we_wait()
+    to_object(res)
+    single_run_purge_event_pool(event_pool)
+    # Print number of 'docs' we have at print_pool in one go without effects
+    single_run_what_to_do_while_we_wait()
 
     debug('Single Run finished. Exiting.')
     sys.exit(0)
 
-# Get the latest event timestamp from the Index
+# If we are here means we are under -f or --nonstop
+# When running under -f or --nonstop we use the Single Run functions to get the initial number of 'docs' in one go
+# and continue later as normal (like the Unix tail -f does (defaulting to 10 docs))
+#
+# 1) get_latest_event_timestamp
+# 2) Move that value to_the_past (10seconds)
+# 3) Go to ES and get number of 'docs' from that point in the past
+# 4) Send events to event_pool
+# 5a) Send events to print_pool
+# 5b) single_run_purge_event_pool() will update 'pointer' with the last printed event
+# 6) Print events (in one go without effects)
+# 7) Move pointer 1ms ahead and hand it over to the main loop (While: True)
+#
+pointer = 0
 if not DUMMY:
-    latest_event_timestamp = get_latest_event_timestamp(index)
-    # Go 10 seconds to the past. There is where we place "in the past" pointer to give time to ES to consolidate its index.
-    pointer = latest_event_timestamp - to_the_past
+    # latest_event_timestamp = get_latest_event_timestamp()
+    # # Go 10 seconds to the past. There is where we place "in the past" pointer to give time to ES to consolidate its index.
+    # pointer = latest_event_timestamp - to_the_past
+
+    latest_event_timestamp = get_latest_event_timestamp()
+    latest_event_timestamp -= to_the_past
+    res = get_latest_events(from_epoch_milliseconds_to_string(latest_event_timestamp))
+    # to_object(res)
+    # single_run_purge_event_pool(event_pool)
+    # single_run_what_to_do_while_we_wait()
+    # pointer += 1
 else:
     # latest_event_timestamp = get_latest_event_timestamp_dummy_load()  # 'index' not necessary for dummy_load
     # pointer = latest_event_timestamp - to_the_past
+    # pointer = 0
 
-    # When running under -f --nonstop we use the Single Run functions to get the initial number of 'docs' in one go
-    # and continue later as normal (like the Unix tail does)
     latest_event_timestamp = get_latest_event_timestamp_dummy_load()
     latest_event_timestamp -= to_the_past
-    res = get_latest_events_dummy_load(latest_event_timestamp)
-    to_object(res)
-    single_run_purge_event_pool(event_pool)
-    single_run_what_to_do_while_we_wait()
-    pointer = latest_event_timestamp + 1
-
-    print "XXX"
+    res = get_latest_events_dummy_load(from_epoch_milliseconds_to_string(latest_event_timestamp))
+    # to_object(res)
+    # single_run_purge_event_pool(event_pool)
+    # single_run_what_to_do_while_we_wait()
+    # pointer += 1
+to_object(res)
+single_run_purge_event_pool(event_pool)
+single_run_what_to_do_while_we_wait()
+pointer += 1
 
 # # Go 10 seconds to the past. There is where we place "in the past" pointer to give time to ES to consolidate its index.
 # pointer = latest_event_timestamp - to_the_past
@@ -843,20 +889,15 @@ thread.start()
 
 while True:
 
-    # From timestamp in milliseconds to Elasticsearch format (seconds.milliseconds). i.e: 2016-07-14T13:37:45.123Z
-    # from_date_time = from_epoch_milliseconds_to_string(ten_seconds_ago)
-    # from_date_time = from_epoch_milliseconds_to_string(pointer)
-
     if not thread.isAlive():
+        # From milliseconds to Elasticsearch format (seconds.milliseconds). i.e: 2016-07-14T13:37:45.123Z
         thread = Threading(1,"Thread-1", from_epoch_milliseconds_to_string(pointer))
-        # thread = Threading(1,"Thread-1", from_date_time)
-        # thread = Threading(1,"Thread-1", (int(datetime.datetime.utcnow().strftime('%s%f')[:-3])) - to_the_past )
         thread.start()
 
     # "Send to print" and purge oldest events in the pool
     purge_event_pool(event_pool)
 
-    # Wait for Elasticsearch to index a bit more of stuff (and Print whatever is ready meanwhile)
+    # Wait for Elasticsearch to index a bit more of stuff (and Print whatever is ready while we wait)
     wait(interval)
 
     difference = get_newest_event_timestamp(event_pool) - pointer
