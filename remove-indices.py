@@ -30,6 +30,7 @@ parser = ArgumentParser(description='Delete old indices in order to get free spa
 parser.add_argument('-e', '--endpoint', help='ES endpoint URL', required=True)
 parser.add_argument('-d', '--desired', help='Minimum desired free space percentage(%): 20, 30, etc. Default: 30', default=30)
 parser.add_argument('-i', '--indices', help='Minimum number of indices required. Warning! Lowering this may delete the whole cluster. Default: 7', default=7)
+parser.add_argument('-p', '--prefix', help='Index prefix to delete. Default: logstash', default='logstash')
 parser.add_argument('-r', '--dryrun', help='Run without deleting anything', action="store_true")
 args = parser.parse_args()
 
@@ -46,6 +47,8 @@ if args.dryrun:
     print "INFO: *** Running in Dry Run mode ***"
 else:
     dry_run = False
+# Index prefix
+prefix = args.prefix
 
 # Workaround to make it work in AWS AMI Linux
 # Python in AWS fails to locate the CA to validate the ES endpoint SSL and we need to specify it :(
@@ -69,10 +72,10 @@ def get_free_space_percentage():
 
 def get_indices_list():
     indices = []
-    list = es.indices.get_aliases()
+    list = es.indices.get_alias()
     for index in list:
-        # We only care for Logstash stuff. Don't delete Kibana config!
-        if index[0:9] == 'logstash-':
+        # Use only indices that match our prefix
+        if index[0:len(prefix)] == prefix:
             indices.append(str(index))
     return indices
 
@@ -116,7 +119,7 @@ else:
     indices = get_indices_list()
     indices = sorted(indices)
     print "INFO: Total",len(indices),"indices found."
-    print "INFO: From",indices[0][9:20],"to",indices[-1][9:20]
+    print "INFO: From",indices[0],"to",indices[-1]
 
     # Fail safe. Don't go too far.
     if len(indices) < minimum_indices:
